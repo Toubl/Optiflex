@@ -38,8 +38,8 @@ class JobShop:
         self.individuals = []
         self.starting_time_ij = None
         self.completion_time_ij = None
-        self.completion_time_irm = None
-        self.starting_time_irm = None
+        self.completion_time_rm = None
+        self.starting_time_rm = None
         self.shape = None
         self.i = None
         self.j = None
@@ -48,6 +48,7 @@ class JobShop:
         self.y_jirm = None
         self.iteration_number = 0
         self.p_ij = None
+        self.priority_list = None
 
         self.start_time = None
 
@@ -72,8 +73,8 @@ class JobShop:
     def generate_initial_solution(self):
         # Estimating the length of the used matrix dimensions
         self._estimating_initial_domains()
-        priority_list = self._generate_priority_list()
-        self._initial_scheduling(priority_list)
+        self.priority_list = self._generate_priority_list()
+        self._initial_scheduling(self.priority_list)
 
         """
         # Depending on the processing time, a new array y_jim is generated holding decision information about which
@@ -104,9 +105,9 @@ class JobShop:
 
     def calculate_fitness_function(self):
         # Initialize helper variables with its correct dimensions
-        self.starting_time_irm = np.zeros((self.i, self.r + 1, self.m))
-        self.starting_time_irm[0, 0, :] = 0
-        self.completion_time_irm = np.zeros((self.i, self.r, self.m))
+        self.starting_time_rm = np.zeros((self.r, self.m))
+        self.starting_time_rm[0, :] = 0
+        self.completion_time_rm = np.zeros((self.r, self.m))
         self.starting_time_ij = np.zeros((self.i, self.j))
         self.completion_time_ij = np.zeros((self.i, self.j))
 
@@ -116,7 +117,6 @@ class JobShop:
         processing_time = np.swapaxes(processing_time, 2, 3)
 
         self._equation_1(processing_time)
-        self._equation_2()
         self._equation_5_and_6()
         self._equation_7()
 
@@ -127,32 +127,23 @@ class JobShop:
         for m in range(self.m):
             addition = 0
             for r in range(self.r):
+                addition = 0
                 for i in range(self.i):
                     for j in range(self.j):
                         addition += (
                             processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
                         )
-                    self.starting_time_irm[i, r + 1, m] = (
-                            self.starting_time_irm[i, r, m]
+                        if processing_time[j, i, r, m] * self.y_jirm[j, i, r, m] != 0:
+                            print(processing_time[j, i, r, m] * self.y_jirm[j, i, r, m])
+                            print(i, j)
+                try:
+                    self.starting_time_rm[r + 1, m] = (
+                            self.starting_time_rm[r, m]
                             + addition)
+                except:
+                    pass
 
-                    """  
-                    if addition != 0:
-                        try:
-                            self.starting_time_irm[i, r + 1, m] = (
-                                self.starting_time_irm[i, r, m]
-                                + addition
-                                + self.starting_time_irm[i - 1, r, m]
-                            )
-                        except:
-                            self.starting_time_irm[i, r + 1, m] = (
-                                self.starting_time_irm[i, r, m] + addition
-                            )
-                    """
-
-    def _equation_2(self):
-        for r in range(self.r):
-            self.completion_time_irm[:, r, :] = self.starting_time_irm[:, r + 1, :]
+                self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
 
     def _equation_5_and_6(self):
         for j in range(self.j):
@@ -160,18 +151,29 @@ class JobShop:
                 for r in range(self.r):
                     for m in range(self.m):
                         if self.y_jirm[j, i, r, m] == 1:
-                            self.starting_time_ij[i, j] = self.starting_time_irm[
-                                i, r, m
+                            self.starting_time_ij[i, j] = self.starting_time_rm[
+                                r, m
                             ]
-                            self.completion_time_ij[i, j] = self.completion_time_irm[
-                                i, r, m
+                            self.completion_time_ij[i, j] = self.completion_time_rm[
+                                r, m
                             ]
 
     def _equation_7(self):
         for j in range(self.j):
             for i in range(self.i - 1):
                 if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
+                    difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
                     self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
+                    #  self.completion_time_ij[i+1, j] += difference
+                    # TODO update s_irm and rename the calculated starting and completion time here
+                    machine = np.where(self.y_jirm[j, i+1, :, :] == 1)[1]
+                    position = (np.where(self.y_jirm[j, i+1, :, :] == 1)[0])[0]
+                    jobs = np.where(self.y_jirm[:, :, position:, machine] == 1)[0]
+                    operations = (np.where(self.y_jirm[:, :, position:, machine] == 1)[1])
+                    for job, operation in zip(jobs, operations):
+                        self.completion_time_ij[operation:, job] += difference
+                    for job, operation in zip(jobs[1:], operations[1:]):
+                        self.starting_time_ij[operation:, job] += difference
 
     def determine_termination_criterion(self):
         maximum_iter = 10
