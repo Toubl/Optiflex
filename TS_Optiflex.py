@@ -61,9 +61,9 @@ class JobShop:
         self.generate_initial_solution()
         makespan = self.calculate_fitness_function()
         print(makespan)
-        while not self.determine_termination_criterion():
-            self.generate_new_solution()
-            self.calculate_fitness_function()
+        # while not self.determine_termination_criterion():
+        #    self.generate_new_solution()
+        #    self.calculate_fitness_function()
 
         self.plot_gantt_chart()
 
@@ -111,19 +111,18 @@ class JobShop:
         self.starting_time_ij = np.zeros((self.i, self.j))
         self.completion_time_ij = np.zeros((self.i, self.j))
 
-        processing_time = np.repeat(
-            self.processing_time[:, :, :, np.newaxis], self.r, axis=3
-        )
-        processing_time = np.swapaxes(processing_time, 2, 3)
-
-        self._equation_1(processing_time)
+        self._equation_1()
         self._equation_5_and_6()
         self._equation_7()
 
         makespan = np.max(self.completion_time_ij)
         return makespan
 
-    def _equation_1(self, processing_time):
+    def _equation_1(self, update=False):
+        processing_time = np.repeat(
+            self.processing_time[:, :, :, np.newaxis], self.r, axis=3
+        )
+        processing_time = np.swapaxes(processing_time, 2, 3)
         for m in range(self.m):
             addition = 0
             for r in range(self.r):
@@ -133,47 +132,88 @@ class JobShop:
                         addition += (
                             processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
                         )
-                        if processing_time[j, i, r, m] * self.y_jirm[j, i, r, m] != 0:
-                            print(processing_time[j, i, r, m] * self.y_jirm[j, i, r, m])
-                            print(i, j)
                 try:
-                    self.starting_time_rm[r + 1, m] = (
-                            self.starting_time_rm[r, m]
-                            + addition)
+                    if update is False:
+                        self.starting_time_rm[r + 1, m] = (
+                            self.starting_time_rm[r, m] + addition
+                        )
+                    elif (
+                        self.starting_time_rm[r + 1, m] < self.completion_time_rm[r, m]
+                    ):
+                        self.starting_time_rm[r + 1, m] = self.completion_time_rm[r, m]
+
                 except:
                     pass
+                if update is False:
+                    self.completion_time_rm[r, m] = (
+                        self.starting_time_rm[r, m] + addition
+                    )
 
-                self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
-
-    def _equation_5_and_6(self):
-        for j in range(self.j):
-            for i in range(self.i):
-                for r in range(self.r):
-                    for m in range(self.m):
-                        if self.y_jirm[j, i, r, m] == 1:
-                            self.starting_time_ij[i, j] = self.starting_time_rm[
-                                r, m
-                            ]
-                            self.completion_time_ij[i, j] = self.completion_time_rm[
-                                r, m
-                            ]
+    def _equation_5_and_6(self, switch=True):
+        if switch is True:
+            for j in range(self.j):
+                for i in range(self.i):
+                    for r in range(self.r):
+                        for m in range(self.m):
+                            if self.y_jirm[j, i, r, m] == 1:
+                                self.starting_time_ij[i, j] = self.starting_time_rm[
+                                    r, m
+                                ]
+                                self.completion_time_ij[i, j] = self.completion_time_rm[
+                                    r, m
+                                ]
+        if switch is False:
+            for j in range(self.j):
+                for i in range(self.i):
+                    for r in range(self.r):
+                        for m in range(self.m):
+                            if self.y_jirm[j, i, r, m] == 1:
+                                self.starting_time_rm[r, m] = self.starting_time_ij[
+                                    i, j
+                                ]
+                                self.completion_time_rm[r, m] = self.completion_time_ij[
+                                    i, j
+                                ]
 
     def _equation_7(self):
+        """
         for j in range(self.j):
             for i in range(self.i - 1):
                 if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
                     difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
-                    self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
-                    #  self.completion_time_ij[i+1, j] += difference
-                    # TODO update s_irm and rename the calculated starting and completion time here
-                    machine = np.where(self.y_jirm[j, i+1, :, :] == 1)[1]
-                    position = (np.where(self.y_jirm[j, i+1, :, :] == 1)[0])[0]
+
+                    machine = np.where(self.y_jirm[j, i + 1, :, :] == 1)[1]
+                    position = (np.where(self.y_jirm[j, i + 1, :, :] == 1)[0])[0]
                     jobs = np.where(self.y_jirm[:, :, position:, machine] == 1)[0]
                     operations = (np.where(self.y_jirm[:, :, position:, machine] == 1)[1])
                     for job, operation in zip(jobs, operations):
                         self.completion_time_ij[operation:, job] += difference
                     for job, operation in zip(jobs[1:], operations[1:]):
                         self.starting_time_ij[operation:, job] += difference
+        """
+# TODO Reihenfolge tauschen: Zuerst über Position und Maschine iterieren
+        for j in range(self.j):
+            for i in range(self.i - 1):
+
+                if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
+                    difference = -(
+                        self.starting_time_ij[i + 1, j] - self.completion_time_ij[i, j]
+                    )
+                    self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
+                    self.completion_time_ij[i + 1, j] = (
+                        self.completion_time_ij[i, j] + difference
+                    )
+                    self._equation_5_and_6(switch=False)
+
+                m1 = np.where(self.y_jirm[j, i + 1, :, :] == 1)[1]
+                r1 = (np.where(self.y_jirm[j, i + 1, :, :] == 1)[0])[0]
+                m0 = np.where(self.y_jirm[j, i, :, :] == 1)[1]
+                r0 = (np.where(self.y_jirm[j, i, :, :] == 1)[0])[0]
+
+                if self.starting_time_rm[r1, m1] < self.completion_time_rm[r0, m1]:
+                    self.starting_time_rm[r1, m1] = self.completion_time_rm[r0, m1]
+                    self._equation_5_and_6()
+                    print("hallo")
 
     def determine_termination_criterion(self):
         maximum_iter = 10
@@ -295,21 +335,33 @@ class JobShop:
             for i in range(self.i):
                 machine_index = []
                 for m in range(self.m):
-                    if any(np.ndarray(self.processing_time[job_index, i, m], dtype=bool)) is True:
+                    if (
+                        any(
+                            np.ndarray(
+                                self.processing_time[job_index, i, m], dtype=bool
+                            )
+                        )
+                        is True
+                    ):
                         machine_index.append(m)
                 # get the minimum of machine position
-                machine_choice = machine_index[np.argmin(machine_position[machine_index])]
-                self.y_jirm[job_index, i, machine_position[machine_choice], machine_choice] = 1
+                machine_choice = machine_index[
+                    np.argmin(machine_position[machine_index])
+                ]
+                self.y_jirm[
+                    job_index, i, machine_position[machine_choice], machine_choice
+                ] = 1
                 machine_position[machine_choice] += 1
 
     def plot_gantt_chart(self):
         import plotly.figure_factory as ff
         import plotly.io as pio
-        pio.renderers.default = 'browser'
+
+        pio.renderers.default = "browser"
         df = []
         color = 0
         cw = lambda: np.random.randint(0, 255)
-        colors = ['#%02X%02X%02X' % (cw(), cw(), cw())]
+        colors = ["#%02X%02X%02X" % (cw(), cw(), cw())]
 
         for j in range(self.j):
             for m in range(self.m):
@@ -323,11 +375,15 @@ class JobShop:
                         )
                         df.append(entry)
 
-            colors.append('#%02X%02X%02X' % (cw(), cw(), cw()))
-            #color += 100/self.j
+            colors.append("#%02X%02X%02X" % (cw(), cw(), cw()))
+            # color += 100/self.j
 
         fig = ff.create_gantt(
-            df, colors=colors, index_col="Resource", show_colorbar=True, group_tasks=False
+            df,
+            colors=colors,
+            index_col="Resource",
+            show_colorbar=True,
+            group_tasks=False,
         )
         fig.show()
 
