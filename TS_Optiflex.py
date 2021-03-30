@@ -4,6 +4,7 @@ import time
 import matplotlib.pyplot as plt
 import copy
 import pyfiglet
+from alive_progress import alive_bar
 
 
 """
@@ -49,6 +50,7 @@ class JobShop:
         self.iteration_number = 0
         self.p_ij = None
         self.priority_list = None
+        self.max_iter = 1
 
         self.start_time = None
 
@@ -60,10 +62,13 @@ class JobShop:
 
         self.generate_initial_solution()
         makespan = self.calculate_fitness_function()
-        print(makespan)
-        # while not self.determine_termination_criterion():
-        #    self.generate_new_solution()
-        #    self.calculate_fitness_function()
+        print('Makespan of initial solution: {}'.format(makespan))
+
+        with alive_bar(self.max_iter, title='Iterations') as bar:
+            while not self.determine_termination_criterion():
+                self.generate_new_solution()
+                self.calculate_fitness_function()
+                bar()
 
         self.plot_gantt_chart()
 
@@ -76,32 +81,8 @@ class JobShop:
         self.priority_list = self._generate_priority_list()
         self._initial_scheduling(self.priority_list)
 
-        """
-        # Depending on the processing time, a new array y_jim is generated holding decision information about which
-        # machine is chosen for processing of a certain operation
-        self.p_ij = np.zeros((self.i, self.j))
-        self.y_jirm = np.zeros(self.shape)  # np.zeros(np.shape(self.processing_time))
-        weights = []
-        position = [0] * self.m
-        for i in range(self.i):
-            for j in range(self.j):
-                for m in range(self.m):
-                    weights.append(self.processing_time[j, i, m])
-                weights = weights / np.sum(weights)
-                indices = np.arange(self.m)
-                machine_index = np.random.choice(indices, p=weights)
-                position_index = position[machine_index]
-                self.y_jirm[j, i, position_index, machine_index] = 1
-                self.p_ij[i, j] = self.processing_time[j, i, machine_index]
-                # Updating helper variables
-                position[machine_index] += 1
-                weights = []
-        """
         # Do a feasibility check
         self._check_feasibility()
-
-        # In order to receive an initial solution, y_jim has to extended to a fourth dimension, containing the position
-        # for each operation on a machine
 
     def calculate_fitness_function(self):
         # Initialize helper variables with its correct dimensions
@@ -124,7 +105,6 @@ class JobShop:
         )
         processing_time = np.swapaxes(processing_time, 2, 3)
         for m in range(self.m):
-            addition = 0
             for r in range(self.r):
                 addition = 0
                 for i in range(self.i):
@@ -149,31 +129,18 @@ class JobShop:
                         self.starting_time_rm[r, m] + addition
                     )
 
-    def _equation_5_and_6(self, switch=True):
-        if switch is True:
-            for j in range(self.j):
-                for i in range(self.i):
-                    for r in range(self.r):
-                        for m in range(self.m):
-                            if self.y_jirm[j, i, r, m] == 1:
-                                self.starting_time_ij[i, j] = self.starting_time_rm[
-                                    r, m
-                                ]
-                                self.completion_time_ij[i, j] = self.completion_time_rm[
-                                    r, m
-                                ]
-        if switch is False:
-            for j in range(self.j):
-                for i in range(self.i):
-                    for r in range(self.r):
-                        for m in range(self.m):
-                            if self.y_jirm[j, i, r, m] == 1:
-                                self.starting_time_rm[r, m] = self.starting_time_ij[
-                                    i, j
-                                ]
-                                self.completion_time_rm[r, m] = self.completion_time_ij[
-                                    i, j
-                                ]
+    def _equation_5_and_6(self):
+        for j in range(self.j):
+            for i in range(self.i):
+                for r in range(self.r):
+                    for m in range(self.m):
+                        if self.y_jirm[j, i, r, m] == 1:
+                            self.starting_time_ij[i, j] = self.starting_time_rm[
+                                r, m
+                            ]
+                            self.completion_time_ij[i, j] = self.completion_time_rm[
+                                r, m
+                            ]
 
     def _equation_7(self):
         for r in range(self.r):
@@ -188,68 +155,32 @@ class JobShop:
                     break
                 if i < self.i - 1:
                     if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
-                        #  wenn diese Bedingung zutrifft, müssen alle nachfolgenden operation berücksichtigt werden
-                        #  und von diesen ausgehend alle nachfolgenden positionen auf allen maschinen
-
-                        difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
-                        #self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
-                        #self.completion_time_ij[i + 1, j] += difference
+                        difference = (
+                            self.completion_time_ij[i, j]
+                            - self.starting_time_ij[i + 1, j]
+                        )
+                        # self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
+                        # self.completion_time_ij[i + 1, j] += difference
 
                         for ii in range(i + 1, self.i):
                             r_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[0])
                             m_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[1])
                             for rr in range(r_new, self.r):
                                 try:
-                                    j_new = int(np.where(self.y_jirm[:, :, rr, m_new] == 1)[0])
-                                    i_new = int(np.where(self.y_jirm[:, :, rr, m_new] == 1)[1])
+                                    j_new = int(
+                                        np.where(self.y_jirm[:, :, rr, m_new] == 1)[0]
+                                    )
+                                    i_new = int(
+                                        np.where(self.y_jirm[:, :, rr, m_new] == 1)[1]
+                                    )
                                     self.starting_time_ij[i_new, j_new] += difference
                                     self.completion_time_ij[i_new, j_new] += difference
                                 except:
                                     break
-            """
-        for j in range(self.j):
-            for i in range(self.i - 1):
-                if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
-                    difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
-
-                    machine = np.where(self.y_jirm[j, i + 1, :, :] == 1)[1]
-                    position = (np.where(self.y_jirm[j, i + 1, :, :] == 1)[0])[0]
-                    jobs = np.where(self.y_jirm[:, :, position:, machine] == 1)[0]
-                    operations = (np.where(self.y_jirm[:, :, position:, machine] == 1)[1])
-                    for job, operation in zip(jobs, operations):
-                        self.completion_time_ij[operation:, job] += difference
-                    for job, operation in zip(jobs[1:], operations[1:]):
-                        self.starting_time_ij[operation:, job] += difference
-
-# TODO Reihenfolge tauschen: Zuerst über Position und Maschine iterieren
-        for j in range(self.j):
-            for i in range(self.i - 1):
-
-                if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
-                    difference = -(
-                        self.starting_time_ij[i + 1, j] - self.completion_time_ij[i, j]
-                    )
-                    self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
-                    self.completion_time_ij[i + 1, j] = (
-                        self.completion_time_ij[i, j] + difference
-                    )
-                    self._equation_5_and_6(switch=False)
-
-                m1 = np.where(self.y_jirm[j, i + 1, :, :] == 1)[1]
-                r1 = (np.where(self.y_jirm[j, i + 1, :, :] == 1)[0])[0]
-                m0 = np.where(self.y_jirm[j, i, :, :] == 1)[1]
-                r0 = (np.where(self.y_jirm[j, i, :, :] == 1)[0])[0]
-
-                if self.starting_time_rm[r1, m1] < self.completion_time_rm[r0, m1]:
-                    self.starting_time_rm[r1, m1] = self.completion_time_rm[r0, m1]
-                    self._equation_5_and_6()
-                    print("hallo")
-            """
 
     def determine_termination_criterion(self):
-        maximum_iter = 10
         self.iteration_number += 1
-        if maximum_iter <= self.iteration_number:
+        if self.max_iter <= self.iteration_number-1:
             return True
         return False
 
@@ -296,8 +227,6 @@ class JobShop:
             if x > y:
                 print("First check failed")
                 return False
-        print("First check passed")
-
         # Second feasibility check
         # Returns True if each operation of a job is assigned to exactly one machine
         # Word sheet equation 4: \sum_r^J\sum_m^M (y_jirm * f_jim) = 1
@@ -316,7 +245,7 @@ class JobShop:
         tensor_contraction = np.sum(tensor_contraction, axis=2)
 
         if tensor_contraction.all:
-            print("Second check passed")
+            pass
         else:
             print("Second check failed")
             return False
@@ -416,10 +345,12 @@ class JobShop:
             show_colorbar=True,
             group_tasks=True,
         )
-        fig.update_traces(mode='lines', line_color='black', selector=dict(fill='toself'))
+        fig.update_traces(
+            mode="lines", line_color="black", selector=dict(fill="toself")
+        )
         for trace in fig.data:
-            trace.x += (trace.x[0],)
-            trace.y += (trace.y[0],)
+            trace.x += (trace.x[0], trace.x[0], trace.x[0])
+            trace.y += (trace.y[-5], trace.y[0], trace.y[0])
         fig.show()
 
 
@@ -451,9 +382,7 @@ def extract_csv(file_name, dimension=None):
 
 if __name__ == "__main__":
 
-    processing_time_path = (
-        "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
-    )
+    processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
     processing_time_input = extract_csv(processing_time_path, 3)
 
     # After read in everything the object can be created and the main_run can start
