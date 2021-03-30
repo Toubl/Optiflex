@@ -176,7 +176,37 @@ class JobShop:
                                 ]
 
     def _equation_7(self):
-        """
+        for r in range(self.r):
+            for m in range(self.m):
+                #  get i and j
+                j = np.where(self.y_jirm[:, :, r, m] == 1)[0]
+                i = np.where(self.y_jirm[:, :, r, m] == 1)[1]
+                try:
+                    j = int(j)
+                    i = int(i)
+                except:
+                    break
+                if i < self.i - 1:
+                    if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
+                        #  wenn diese Bedingung zutrifft, müssen alle nachfolgenden operation berücksichtigt werden
+                        #  und von diesen ausgehend alle nachfolgenden positionen auf allen maschinen
+
+                        difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
+                        #self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
+                        #self.completion_time_ij[i + 1, j] += difference
+
+                        for ii in range(i + 1, self.i):
+                            r_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[0])
+                            m_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[1])
+                            for rr in range(r_new, self.r):
+                                try:
+                                    j_new = int(np.where(self.y_jirm[:, :, rr, m_new] == 1)[0])
+                                    i_new = int(np.where(self.y_jirm[:, :, rr, m_new] == 1)[1])
+                                    self.starting_time_ij[i_new, j_new] += difference
+                                    self.completion_time_ij[i_new, j_new] += difference
+                                except:
+                                    break
+            """
         for j in range(self.j):
             for i in range(self.i - 1):
                 if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
@@ -190,7 +220,7 @@ class JobShop:
                         self.completion_time_ij[operation:, job] += difference
                     for job, operation in zip(jobs[1:], operations[1:]):
                         self.starting_time_ij[operation:, job] += difference
-        """
+
 # TODO Reihenfolge tauschen: Zuerst über Position und Maschine iterieren
         for j in range(self.j):
             for i in range(self.i - 1):
@@ -214,6 +244,7 @@ class JobShop:
                     self.starting_time_rm[r1, m1] = self.completion_time_rm[r0, m1]
                     self._equation_5_and_6()
                     print("hallo")
+            """
 
     def determine_termination_criterion(self):
         maximum_iter = 10
@@ -383,8 +414,12 @@ class JobShop:
             colors=colors,
             index_col="Resource",
             show_colorbar=True,
-            group_tasks=False,
+            group_tasks=True,
         )
+        fig.update_traces(mode='lines', line_color='black', selector=dict(fill='toself'))
+        for trace in fig.data:
+            trace.x += (trace.x[0],)
+            trace.y += (trace.y[0],)
         fig.show()
 
 
@@ -417,7 +452,7 @@ def extract_csv(file_name, dimension=None):
 if __name__ == "__main__":
 
     processing_time_path = (
-        "/Users/q517174/PycharmProjects/pythonProject/input_data/processing_time.csv"
+        "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
     )
     processing_time_input = extract_csv(processing_time_path, 3)
 
