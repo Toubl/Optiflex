@@ -50,7 +50,7 @@ class JobShop:
         self.iteration_number = 0
         self.p_ij = None
         self.priority_list = None
-        self.max_iter = 1
+        self.max_iter = 5
 
         self.start_time = None
 
@@ -62,15 +62,17 @@ class JobShop:
 
         self.generate_initial_solution()
         makespan = self.calculate_fitness_function()
-        print('Makespan of initial solution: {}'.format(makespan))
+        print("Makespan of initial solution: {}".format(makespan))
+        self.plot_gantt_chart(group=False, title='Initial Scheduling')
 
-        with alive_bar(self.max_iter, title='Iterations') as bar:
+        with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
                 self.generate_new_solution()
-                self.calculate_fitness_function()
+                # self.calculate_fitness_function()
+                time.sleep(0.5)
                 bar()
 
-        self.plot_gantt_chart()
+        # self.plot_gantt_chart(group=True)
 
         time_for_calculation = (time.time() - self.start_time) / 60
         print("Total time for calculation: {:.4f} minutes".format(time_for_calculation))
@@ -100,6 +102,7 @@ class JobShop:
         return makespan
 
     def _equation_1(self, update=False):
+        # TODO: Circumvent bare exception cause
         processing_time = np.repeat(
             self.processing_time[:, :, :, np.newaxis], self.r, axis=3
         )
@@ -113,21 +116,14 @@ class JobShop:
                             processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
                         )
                 try:
-                    if update is False:
-                        self.starting_time_rm[r + 1, m] = (
-                            self.starting_time_rm[r, m] + addition
-                        )
-                    elif (
-                        self.starting_time_rm[r + 1, m] < self.completion_time_rm[r, m]
-                    ):
-                        self.starting_time_rm[r + 1, m] = self.completion_time_rm[r, m]
-
-                except:
-                    pass
-                if update is False:
-                    self.completion_time_rm[r, m] = (
+                    self.starting_time_rm[r + 1, m] = (
                         self.starting_time_rm[r, m] + addition
                     )
+                except:
+                    pass
+                self.completion_time_rm[r, m] = (
+                    self.starting_time_rm[r, m] + addition
+                )
 
     def _equation_5_and_6(self):
         for j in range(self.j):
@@ -135,14 +131,13 @@ class JobShop:
                 for r in range(self.r):
                     for m in range(self.m):
                         if self.y_jirm[j, i, r, m] == 1:
-                            self.starting_time_ij[i, j] = self.starting_time_rm[
-                                r, m
-                            ]
+                            self.starting_time_ij[i, j] = self.starting_time_rm[r, m]
                             self.completion_time_ij[i, j] = self.completion_time_rm[
                                 r, m
                             ]
 
     def _equation_7(self):
+        # TODO: Find a way to circumvent bare exception cause.
         for r in range(self.r):
             for m in range(self.m):
                 #  get i and j
@@ -159,8 +154,6 @@ class JobShop:
                             self.completion_time_ij[i, j]
                             - self.starting_time_ij[i + 1, j]
                         )
-                        # self.starting_time_ij[i + 1, j] = self.completion_time_ij[i, j]
-                        # self.completion_time_ij[i + 1, j] += difference
 
                         for ii in range(i + 1, self.i):
                             r_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[0])
@@ -180,26 +173,53 @@ class JobShop:
 
     def determine_termination_criterion(self):
         self.iteration_number += 1
-        if self.max_iter <= self.iteration_number-1:
+        if self.max_iter <= self.iteration_number - 1:
             return True
         return False
 
     def generate_new_solution(self):
-        pass
+        self._selecting_move_type()
+        self._apply_move_type()
 
     def _selecting_move_type(self):
-        pass
+        if self.iteration_number % 10 == 0:
+            self._move_operation_insert_on_another_machine()
+        elif self.iteration_number % 3 == 0:
+            self._move_operation_insert_operation_on_one_machine()
+        else:
+            self._move_operation_position_swap_on_one_machine()
 
     def _apply_move_type(self):
         pass
 
-    def _move_operation_i(self):
+    def _move_operation_insert_on_another_machine(self):
         pass
 
-    def _move_operation_ii(self):
-        pass
+    def _move_operation_position_swap_on_one_machine(self):
+        initial_y_jirm = self.y_jirm
+        # Change y_jirm and calculate all other helper variables again and determine makespan
+        # select the machine to perform this operation
+        m = np.random.randint(0, self.m)
+        # select a position on this machine
+        max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
+        r_swap = np.random.randint(0, max_pos)
+        # swap this position with all others, this gives the neighborhood
+        for r in range(max_pos):
+            if r != r_swap:
+                # reset self.y_jirm
+                self.y_jirm = initial_y_jirm
+                # swap self.y_jirm[:,:,r,m] with self.y_jirm[:,:,r_swap,m]
+                swap = np.copy(self.y_jirm[:, :, r_swap, m])
+                self.y_jirm[:, :, r_swap, m] = self.y_jirm[:, :, r, m]
+                self.y_jirm[:, :, r, m] = swap
 
-    def _move_operation_iii(self):
+                makespan = self.calculate_fitness_function()
+                # TODO: Add a feasibility check for the new solution
+                # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
+                print('Makespan of new neighbor: {}'.format(makespan))
+                self.plot_gantt_chart(group=False, title='Swap {} and {} on machine {}'.format(r_swap, r, m))
+
+    def _move_operation_insert_operation_on_one_machine(self):
         pass
 
     def _move_maintenance_i(self):
@@ -215,6 +235,20 @@ class JobShop:
         pass
 
     def _check_feasibility(self):
+        """
+        Feasibility check of the generated decision variable y_jirm with respect to two constraints:
+        Feasibility check 1: Operation assignment is only possible if an operation on a machine is feasible.
+        Feasibility check 2: Every operation hast to be assigned to a machine, where the operation is feasible.
+
+        Args:
+            self.y_jirm (array): Decision variable on which feasibility check is performed
+            self.processing_time (array): Transformed to boolean to receive machine feasibility
+
+        Returns:
+            True: If both checks passed
+            False: If at least one check fails
+        """
+
         # First feasibility check
         # Returns True if an operation of a job is only assigned to a machine where this operation is possible.
         # Word sheet equation 3: \sum_r^J y_jirm <= f_jim
@@ -253,6 +287,17 @@ class JobShop:
         return True
 
     def _estimating_initial_domains(self):
+        """
+        Domains for operations, jobs, positions and machines are estimated based on the parameter processing time.
+        The shape for the decision variable is given.
+
+        Args:
+            self.processing_time (array): Processing time for operation i of job j on machine m
+
+        Returns:
+            initial_length (int): Upper bound for total amount of periods
+        """
+
         initial_length = np.sum(self.processing_time)
         self.i = np.shape(self.processing_time)[1]
         self.j = np.shape(self.processing_time)[0]
@@ -268,34 +313,82 @@ class JobShop:
         return initial_length
 
     def _generate_priority_list(self):
+        """
+        All jobs considered in the optimization problem are assigned to a priority list, sorting the jobs
+        from shortest to longest overall completion time. For each pair [i,j], only one feasible machine has to be
+        selected by assigning a weight on each machine depending on its processing time for this operation. Afterwards,
+        the machine is randomly selected.
+        The second part of the function sums up the total processing time for each pair [i,j] and sorting this list
+        with respect to the total processing time, leading to a priority list of jobs.
+
+        Args:
+            self.p_ij (array): Processing time of operation i of job j
+            self.i (int): Number of operation
+            self.j (int): Number of jobs
+            self.m (int): Number of machines
+            self.processing_time (array): Processing time of operation i of job j on machine m
+
+        Returns:
+            priority_list (array): First column containing job index and second column the total completion time
+        """
+        # TODO: remove self.p_ij from self, parameter only needed in this function
         self.p_ij = np.zeros((self.i, self.j))
-        weights = []
+        weights = []  # initialize weights list
+        # loop over all indices of processing time
         for i in range(self.i):
             for j in range(self.j):
                 for m in range(self.m):
                     weights.append(self.processing_time[j, i, m])
-                weights = weights / np.sum(weights)
-                indices = np.arange(self.m)
-                machine_index = np.random.choice(indices, p=weights)
-                self.p_ij[i, j] = self.processing_time[j, i, machine_index]
-                weights = []
-
-        total_time = np.sum(self.p_ij, axis=0)
-        job_index = np.arange(self.j)
-        sort = np.argsort(total_time)
-        priority_list = np.column_stack((job_index[sort], total_time[sort]))
+                weights = weights / np.sum(weights)  # normalize weights, that sum(weights) = 1
+                indices = np.arange(self.m)  # machine indices from 0 to self.m
+                machine_index = np.random.choice(
+                    indices, p=weights
+                )  # randomly select a machine, w.r.t. weights
+                self.p_ij[i, j] = self.processing_time[
+                    j, i, machine_index
+                ]  # store processing time in reduced array
+                weights = []  # reset weights
+        #  --------------------------------------------------------------------
+        total_time = np.sum(
+            self.p_ij, axis=0
+        )  # calculate total completion time for each job (sum over i)
+        job_index = np.arange(self.j)  # job indices from 0 to self.j
+        sort = np.argsort(
+            total_time
+        )  # get indices of sorted processing time (no explicit tiebreaker considered)
+        priority_list = np.column_stack(
+            (job_index[sort], total_time[sort])
+        )  # generate priority list
 
         return priority_list
 
     def _initial_scheduling(self, priority_list):
-        self.y_jirm = np.zeros(self.shape)
-        machine_position = np.array([0] * self.m)
-        for job_index in priority_list[:, 0]:
+        """
+        Depending on the priority list, the jobs will be scheduled on positions of the feasible machines. Operations
+        are assigned to the machine with the lowest position index. If to feasible machines has the same position
+        index, the operation is assigned to the machine with the lowest machine index. Conclusively, the job with the
+        highest priority is assigned to position zero on each machine.
+
+        Args:
+            self.y_jirm (array): Processing time of operation i of job j
+            self.i (int): Number of operation
+            priority_list (array): Jobs sorted depending on total processing time
+            self.m (int): Number of machines
+            self.processing_time (array): Processing time of operation i of job j on machine m
+
+        Returns:
+
+        """
+        self.y_jirm = np.zeros(self.shape)  # initialize decision variable
+        machine_position = np.array(
+            [0] * self.m
+        )  # list to store used machine positions
+        for job_index in priority_list[:, 0]:  # loop over priority list
             job_index = int(job_index)
-            for i in range(self.i):
-                machine_index = []
-                for m in range(self.m):
-                    if (
+            for i in range(self.i):  # loop over operations
+                machine_index = []  # reset machine index
+                for m in range(self.m):  # loop over machine
+                    if (  # check if pair [i,j] is feasible on this machine
                         any(
                             np.ndarray(
                                 self.processing_time[job_index, i, m], dtype=bool
@@ -303,17 +396,35 @@ class JobShop:
                         )
                         is True
                     ):
-                        machine_index.append(m)
-                # get the minimum of machine position
+                        machine_index.append(
+                            m
+                        )  # if feasible, assign machine to possible machines
                 machine_choice = machine_index[
-                    np.argmin(machine_position[machine_index])
+                    np.argmin(
+                        machine_position[machine_index]
+                    )  # get the minimum of machine position and choose this machine
                 ]
+                # set decision variable to one for [i,j] on the determined position and machine
                 self.y_jirm[
                     job_index, i, machine_position[machine_choice], machine_choice
                 ] = 1
                 machine_position[machine_choice] += 1
 
-    def plot_gantt_chart(self):
+    def plot_gantt_chart(self, group=False, title='Gantt_Chart'):
+        """
+        Plot Gantt Chart depending on the starting and completion times of all operations of each job
+
+        Args:
+            self.starting_time_ij (array):
+            self.completion_time_ij (array):
+            group (bool): False if machines in gantt chart are not supposed to group up, True if they are supposed
+            to be grouped
+            title (str): Title of plot
+
+        Returns:
+
+        """
+
         import plotly.figure_factory as ff
         import plotly.io as pio
 
@@ -343,14 +454,15 @@ class JobShop:
             colors=colors,
             index_col="Resource",
             show_colorbar=True,
-            group_tasks=True,
+            group_tasks=group,
+            title=title,
         )
         fig.update_traces(
             mode="lines", line_color="black", selector=dict(fill="toself")
         )
-        for trace in fig.data:
-            trace.x += (trace.x[0], trace.x[0], trace.x[0])
-            trace.y += (trace.y[-5], trace.y[0], trace.y[0])
+        #for trace in fig.data:
+        #    trace.x += (trace.x[0], trace.x[0], trace.x[0])
+        #    trace.y += (trace.y[-3], trace.y[0], trace.y[0])
         fig.show()
 
 
