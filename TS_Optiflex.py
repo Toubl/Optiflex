@@ -50,8 +50,9 @@ class JobShop:
         self.iteration_number = 0
         self.p_ij = None
         self.priority_list = None
-        self.max_iter = 5
+        self.max_iter = 1
 
+        self.feasibility = None
         self.start_time = None
 
     def main_run(self):
@@ -63,7 +64,7 @@ class JobShop:
         self.generate_initial_solution()
         makespan = self.calculate_fitness_function()
         print("Makespan of initial solution: {}".format(makespan))
-        self.plot_gantt_chart(group=False, title='Initial Scheduling')
+        self.plot_gantt_chart(group=True, title="Initial Scheduling, Feasibility: {}".format(self.feasibility))
 
         with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
@@ -96,7 +97,7 @@ class JobShop:
 
         self._equation_1()
         self._equation_5_and_6()
-        self._equation_7()
+        self.feasibility = self._scheduling()
 
         makespan = np.max(self.completion_time_ij)
         return makespan
@@ -121,11 +122,10 @@ class JobShop:
                     )
                 except:
                     pass
-                self.completion_time_rm[r, m] = (
-                    self.starting_time_rm[r, m] + addition
-                )
+                self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
 
     def _equation_5_and_6(self):
+        # Transformation from rm to ij over decision variable y
         for j in range(self.j):
             for i in range(self.i):
                 for r in range(self.r):
@@ -135,14 +135,16 @@ class JobShop:
                             self.completion_time_ij[i, j] = self.completion_time_rm[
                                 r, m
                             ]
-
+        """
     def _equation_7(self):
         # TODO: Find a way to circumvent bare exception cause.
+        store = []
         for r in range(self.r):
             for m in range(self.m):
                 #  get i and j
                 j = np.where(self.y_jirm[:, :, r, m] == 1)[0]
                 i = np.where(self.y_jirm[:, :, r, m] == 1)[1]
+                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
                 try:
                     j = int(j)
                     i = int(i)
@@ -158,18 +160,78 @@ class JobShop:
                         for ii in range(i + 1, self.i):
                             r_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[0])
                             m_new = int(np.where(self.y_jirm[j, ii, :, :] == 1)[1])
-                            for rr in range(r_new, self.r):
-                                try:
-                                    j_new = int(
-                                        np.where(self.y_jirm[:, :, rr, m_new] == 1)[0]
-                                    )
-                                    i_new = int(
-                                        np.where(self.y_jirm[:, :, rr, m_new] == 1)[1]
-                                    )
+                            for rr in range(r_new, max_pos):
+                                # try:
+                                j_new = int(
+                                    np.where(self.y_jirm[:, :, rr, m_new] == 1)[0]
+                                )
+                                i_new = int(
+                                    np.where(self.y_jirm[:, :, rr, m_new] == 1)[1]
+                                )
+                                # TODO: difference must be reduced by idle time between two
+                                # idle time zur vorherigen position
+                                if rr == r_new:
                                     self.starting_time_ij[i_new, j_new] += difference
                                     self.completion_time_ij[i_new, j_new] += difference
-                                except:
-                                    break
+                                else:
+                                    if (
+                                        self.starting_time_ij[i_new, j_new]
+                                        < self.completion_time_ij[store[1], store[0]]
+                                    ):
+                                        diff = self.completion_time_ij[store[1], store[0]] - self.starting_time_ij[
+                                            i_new, j_new
+                                        ]
+                                        self.starting_time_ij[i_new, j_new] += diff
+                                        self.completion_time_ij[i_new, j_new] += diff
+                                store = []
+                                store.append(j_new)
+                                store.append(i_new)
+        """
+
+    def _scheduling(self):
+        # TODO: check number of maximum iterations
+        # TODO: Maybe breaking condition if both scheduling processes have alternating behavior
+        max_iter = self.i * self.j
+        for n in range(max_iter):
+            if n == max_iter - 1:
+                return False
+            rm = self._schedule_rm()
+            ij = self._schedule_ij()
+            if rm is True & ij is True:
+                return True
+
+    def _schedule_rm(self):
+        change = 0
+        for m in range(self.m):
+            max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2])
+            for r in range(max_pos):
+                j1 = np.where(self.y_jirm[:, :, r, m] == 1)[0]
+                i1 = np.where(self.y_jirm[:, :, r, m] == 1)[1]
+                j2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[0]
+                i2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[1]
+                if self.starting_time_ij[i2, j2] < self.completion_time_ij[i1, j1]:
+                    difference = self.completion_time_ij[i1, j1] - self.starting_time_ij[i2, j2]
+                    self.starting_time_ij[i2, j2] += difference
+                    self.completion_time_ij[i2, j2] += difference
+                    change += 1
+        if change == 0:
+            return True
+        else:
+            return False
+
+    def _schedule_ij(self):
+        change = 0
+        for j in range(self.j):
+            for i in range(self.i - 1):
+                if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
+                    difference = self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
+                    self.starting_time_ij[i + 1, j] += difference
+                    self.completion_time_ij[i + 1, j] += difference
+                    change += 1
+        if change == 0:
+            return True
+        else:
+            return False
 
     def determine_termination_criterion(self):
         self.iteration_number += 1
@@ -196,7 +258,7 @@ class JobShop:
         pass
 
     def _move_operation_position_swap_on_one_machine(self):
-        initial_y_jirm = self.y_jirm
+        initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
         m = np.random.randint(0, self.m)
@@ -205,19 +267,23 @@ class JobShop:
         r_swap = np.random.randint(0, max_pos)
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
-            if r != r_swap:
+            if r != r_swap:  # TODO: Additionally, check if move is in tabu list
                 # reset self.y_jirm
-                self.y_jirm = initial_y_jirm
+                self.y_jirm = copy.deepcopy(initial_y_jirm)
                 # swap self.y_jirm[:,:,r,m] with self.y_jirm[:,:,r_swap,m]
                 swap = np.copy(self.y_jirm[:, :, r_swap, m])
                 self.y_jirm[:, :, r_swap, m] = self.y_jirm[:, :, r, m]
                 self.y_jirm[:, :, r, m] = swap
 
                 makespan = self.calculate_fitness_function()
-                # TODO: Add a feasibility check for the new solution
                 # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
-                print('Makespan of new neighbor: {}'.format(makespan))
-                self.plot_gantt_chart(group=False, title='Swap {} and {} on machine {}'.format(r_swap, r, m))
+                print("Makespan of new neighbor: {}".format(makespan))
+                self.plot_gantt_chart(
+                    group=True,
+                    title="Swap {} and {} on machine {}, Feasibility: {}".format(r_swap, r, m, self.feasibility),
+                )
+        # TODO: Selection of the best solution, y_jirm = best solution
+        # TODO: Add move type to the tabu list
 
     def _move_operation_insert_operation_on_one_machine(self):
         pass
@@ -339,7 +405,9 @@ class JobShop:
             for j in range(self.j):
                 for m in range(self.m):
                     weights.append(self.processing_time[j, i, m])
-                weights = weights / np.sum(weights)  # normalize weights, that sum(weights) = 1
+                weights = weights / np.sum(
+                    weights
+                )  # normalize weights, that sum(weights) = 1
                 indices = np.arange(self.m)  # machine indices from 0 to self.m
                 machine_index = np.random.choice(
                     indices, p=weights
@@ -410,7 +478,7 @@ class JobShop:
                 ] = 1
                 machine_position[machine_choice] += 1
 
-    def plot_gantt_chart(self, group=False, title='Gantt_Chart'):
+    def plot_gantt_chart(self, group=False, title="Gantt_Chart"):
         """
         Plot Gantt Chart depending on the starting and completion times of all operations of each job
 
@@ -460,7 +528,7 @@ class JobShop:
         fig.update_traces(
             mode="lines", line_color="black", selector=dict(fill="toself")
         )
-        #for trace in fig.data:
+        # for trace in fig.data:
         #    trace.x += (trace.x[0], trace.x[0], trace.x[0])
         #    trace.y += (trace.y[-3], trace.y[0], trace.y[0])
         fig.show()
