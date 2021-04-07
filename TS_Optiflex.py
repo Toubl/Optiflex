@@ -8,7 +8,7 @@ from alive_progress import alive_bar
 
 
 """
-Tabu Search algorithm for solving complex job shop scheduling problem.
+Tabu Search algorithm for solving complex job shop scheduling problems.
 As a first step, only the basic model is considered as described in the specification word sheet.
 """
 
@@ -19,7 +19,7 @@ class JobShop:
         processing_time (ndarray): Model parameter as csv file
         maintenance_max (int): Maximum number of simultaneous maintenance activities
         maintenance duration (array): Duration of maintenance activity for every task
-        n_m (int): Number for idk
+        n_m (list): Total number of jobs on machine m
         buffer_capacity (list): Buffer capacity for each machine
         max_iter (int): Maximum number of optimization iterations
     """
@@ -42,7 +42,6 @@ class JobShop:
         self.buffer_capacity = buffer_capacity
         self.max_iter = max_iter
 
-        self.individuals = []
         self.starting_time_ij = None
         self.completion_time_ij = None
         self.completion_time_rm = None
@@ -57,6 +56,7 @@ class JobShop:
         self.priority_list = None
         self.make_span = []
         self.optimized_solution = None
+        self.colors = None
 
         self.feasibility = None
         self.start_time = None
@@ -74,7 +74,9 @@ class JobShop:
 
         """
         self.start_time = time.time()
-        np.random.seed(1)
+        np.random.seed(
+            20
+        )  # Fix seed in order to make multiple optimization runs equivalent
         header = pyfiglet.figlet_format("OPTIFLEX", font="big")
         print(header)
 
@@ -102,7 +104,9 @@ class JobShop:
                 ),
             )
         else:
-            print('\n\nNo further optimum found. Initial Solution is already optimal!\n\n')
+            print(
+                "\n\nNo further optimum found. Initial Solution is already optimal!\n\n"
+            )
 
         time_for_calculation = (time.time() - self.start_time) / 60
         print("Total time for calculation: {:.4f} minutes".format(time_for_calculation))
@@ -147,7 +151,7 @@ class JobShop:
 
         self._equation_1()
         self._equation_5_and_6()
-        self.feasibility = self._scheduling()
+        self.feasibility = self.scheduling()
 
         makespan = np.max(self.completion_time_ij)
         return makespan
@@ -165,6 +169,9 @@ class JobShop:
                         addition += (
                             processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
                         )
+                        if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
+                            raise ValueError('Something is wrong in Equation 1')
+
                 self.starting_time_rm[r + 1, m] = self.starting_time_rm[r, m] + addition
                 self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
 
@@ -180,7 +187,17 @@ class JobShop:
                                 r, m
                             ]
 
-    def _scheduling(self):
+    def scheduling(self):
+        """
+        Function to generate the accurate scheduling times for each job and operation. The scheduling constraints
+        concerning the positions on machines and the constraints of operations precedence are called one after the
+        other, until convergence is reached. If the scheduling setup is infeasible, the procedure stops after reaching
+        a certain number of iterations and the infeasibility flag is set to false.
+
+        Returns:
+            True if scheduling is feasible
+            False if scheduling is infeasible
+        """
         # TODO: check number of maximum iterations
         # TODO: Maybe breaking condition if both scheduling processes have alternating behavior
         max_iter = self.i * self.j
@@ -192,6 +209,7 @@ class JobShop:
             if rm is True & ij is True:
                 # TODO: Try another termination criteria, e.g. very bad makespan
                 return True
+        return False
 
     def _schedule_rm(self):
         change = 0
@@ -209,6 +227,7 @@ class JobShop:
                     self.starting_time_ij[i2, j2] += difference
                     self.completion_time_ij[i2, j2] += difference
                     change += 1
+
         if change == 0:
             return True
         else:
@@ -261,13 +280,18 @@ class JobShop:
         selection = []
         makespan = []
         decision = []
+        # Determine operations able to be processed on multiple machines
         for j in range(self.j):
             for i in range(self.i):
                 indices = np.nonzero(self.processing_time[j, i, :])
                 if np.size(indices[0]) > 1:
                     selection.append([j, i, indices])
         # Randomly select i,j
-        choice = np.random.randint(0, len(selection))
+        # TODO: Find a better way here
+        try:
+            choice = np.random.randint(0, len(selection))
+        except:
+            return None
         j = (selection[choice])[0]
         i = (selection[choice])[1]
         # Get current machine
@@ -279,14 +303,15 @@ class JobShop:
             new_machine = machines[np.random.choice(len(machines))]
             if new_machine != current_machine:
                 break
-        self.calculate_fitness_function()
         # Try every position on new machine and select the one with smallest makespan
-        max_pos = np.max((np.where(self.y_jirm[:, :, :, new_machine] == 1))[2]) + 1
-        for r_new in range(max_pos + 1):
+        r_max = np.max((np.where(self.y_jirm[:, :, :, new_machine] == 1))[2]) + 1
+        for r_new in range(r_max + 1):  # +1 because operation can also be set to the last position on new machine
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             for r in range(self.r):
                 if r == r_new:
-                    new_y[:, :, r, new_machine] = self.y_jirm[:, :, current_position, current_machine]
+                    new_y[:, :, r, new_machine] = self.y_jirm[
+                        :, :, current_position, current_machine
+                    ]
                 elif r > r_new:
                     new_y[:, :, r, new_machine] = self.y_jirm[:, :, r - 1, new_machine]
                 else:
@@ -296,12 +321,18 @@ class JobShop:
                 if r == self.r - 1:
                     new_y[:, :, r, current_machine] = 0
                 elif r >= current_position:
-                    new_y[:, :, r, current_machine] = self.y_jirm[:, :, r + 1, current_machine]
+                    new_y[:, :, r, current_machine] = self.y_jirm[
+                        :, :, r + 1, current_machine
+                    ]
                 else:
-                    new_y[:, :, r, current_machine] = self.y_jirm[:, :, r, current_machine]
-        # Generate new y_jirm
+                    new_y[:, :, r, current_machine] = self.y_jirm[
+                        :, :, r, current_machine
+                    ]
+            # Generate new y_jirm
             self.y_jirm = copy.deepcopy(new_y)
             decision.append(self.calculate_fitness_function())
+            if self._check_feasibility() is not True:
+                raise ValueError('Generated solution is not feasible!!!')
             makespan.append([decision[-1], new_y])
             # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
             print("Makespan of new machine assignment: {}".format(makespan[-1][0]))
@@ -309,10 +340,8 @@ class JobShop:
             # if makespan smaller than previous best, update y
             if makespan[-1][0] <= self.make_span[-1]:
                 self.make_span.append(makespan[-1][0])
-                new_y = copy.deepcopy(self.y_jirm)
                 self.optimized_solution = copy.deepcopy(new_y)
 
-        # Set y_jirm to the generated optimal solution if available
         minimum = int(np.argmin(decision))
         self.y_jirm = copy.deepcopy((makespan[minimum])[1])
         # Calculate new makespan
@@ -489,8 +518,9 @@ class JobShop:
                     np.sum(np.array(self.processing_time, dtype=bool), axis=0), axis=0
                 )
             )
-        )
+        ) + 1
         self.shape = [self.j, self.i, self.r, self.m]
+        self.colors = self._generate_colors()
         return initial_length
 
     def _generate_priority_list(self):
@@ -600,7 +630,7 @@ class JobShop:
             self.starting_time_ij (array):
             self.completion_time_ij (array):
             group (bool): False if machines in gantt chart are not supposed to group up, True if they are supposed
-            to be grouped
+            to be grouped.
             title (str): Title of plot
 
         Returns:
@@ -612,8 +642,6 @@ class JobShop:
 
         pio.renderers.default = "browser"
         df = []
-        cw = lambda: np.random.randint(0, 255)
-        colors = ["#%02X%02X%02X" % (cw(), cw(), cw())]
 
         for j in range(self.j):
             for m in range(self.m):
@@ -627,12 +655,9 @@ class JobShop:
                         )
                         df.append(entry)
 
-            colors.append("#%02X%02X%02X" % (cw(), cw(), cw()))
-            # color += 100/self.j
-
         fig = ff.create_gantt(
             df,
-            colors=colors,
+            colors=self.colors,
             index_col="Resource",
             show_colorbar=True,
             group_tasks=group,
@@ -645,6 +670,15 @@ class JobShop:
         #    trace.x += (trace.x[0], trace.x[0], trace.x[0])
         #    trace.y += (trace.y[-3], trace.y[0], trace.y[0])
         fig.show()
+
+    def _generate_colors(self):
+        colors = []
+        for j in range(self.j):
+            r = np.random.randint(0, 255)
+            g = np.random.randint(0, 255)
+            b = np.random.randint(0, 255)
+            colors.append("#%02X%02X%02X" % (r, g, b))
+        return colors
 
 
 def extract_csv(file_name, dimension=None):
