@@ -93,7 +93,7 @@ class JobShop:
         print("Makespan of initial solution: {}".format(makespan))
         self.plot_gantt_chart(
             group=True,
-            title="Initial Scheduling, Feasibility: {}".format(self.feasibility),
+            title="Initial Scheduling with a makespan of {}".format(makespan),
         )
 
         with alive_bar(self.max_iter, title="Iterations") as bar:
@@ -136,7 +136,7 @@ class JobShop:
         self._initial_scheduling(self.priority_list)
 
         # Do a feasibility check
-        self._check_feasibility()
+        # self._check_feasibility()
 
     def calculate_fitness_function(self):
         """
@@ -153,8 +153,12 @@ class JobShop:
         self.starting_time_rm = np.zeros((self.r, self.m))
         self.starting_time_rm[0, :] = 0
         self.completion_time_rm = np.zeros((self.r, self.m))
-        self.starting_time_ij = np.zeros((self.i, self.j))
-        self.completion_time_ij = np.zeros((self.i, self.j))
+        self.starting_time_ij = []  # np.zeros((self.i, self.j))
+        self.completion_time_ij = []  # np.zeros((self.i, self.j))
+
+        for j in range(self.j):
+            self.starting_time_ij.append(np.zeros((self.i[j])))
+            self.completion_time_ij.append(np.zeros((self.i[j])))
 
         self._equation_1()
         self._equation_5_and_6()
@@ -164,19 +168,25 @@ class JobShop:
         return makespan
 
     def _equation_1(self):
-        processing_time = np.repeat(
-            self.processing_time[:, :, :, np.newaxis], self.r, axis=3
-        )
-        processing_time = np.swapaxes(processing_time, 2, 3)
+        processing_time = []
+        for j in range(self.j):
+            irm = np.repeat(self.processing_time[j][:, :, np.newaxis], self.r, axis=2)
+            irm = np.swapaxes(irm[:], 1, 2)
+            processing_time.append(irm)
+
+        #processing_time = np.repeat(
+        #    self.processing_time[:][:, np.newaxis], self.r, axis=2
+        #)
+        #processing_time = np.swapaxes(processing_time[:], 1, 2)
         for m in range(self.m):
             for r in range(self.r - 1):
                 addition = 0
-                for i in range(self.i):
-                    for j in range(self.j):
+                for j in range(self.j):
+                    for i in range(self.i[j]):
                         addition += (
-                            processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
+                            processing_time[j][i, r, m] * self.y_jirm[j][i, r, m]
                         )
-                        #if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
+                        # if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
                         #    raise ValueError('Something is wrong in Equation 1')
 
                 self.starting_time_rm[r + 1, m] = self.starting_time_rm[r, m] + addition
@@ -185,12 +195,12 @@ class JobShop:
     def _equation_5_and_6(self):
         # Transformation from rm to ij over decision variable y
         for j in range(self.j):
-            for i in range(self.i):
+            for i in range(self.i[j]):
                 for r in range(self.r):
                     for m in range(self.m):
-                        if self.y_jirm[j, i, r, m] == 1:
-                            self.starting_time_ij[i, j] = self.starting_time_rm[r, m]
-                            self.completion_time_ij[i, j] = self.completion_time_rm[
+                        if self.y_jirm[j][i, r, m] == 1:
+                            self.starting_time_ij[j][i] = self.starting_time_rm[r, m]
+                            self.completion_time_ij[j][i] = self.completion_time_rm[
                                 r, m
                             ]
 
@@ -207,7 +217,7 @@ class JobShop:
         """
         # TODO: check number of maximum iterations
         # TODO: Maybe breaking condition if both scheduling processes have alternating behavior
-        max_iter = self.i * self.j
+        max_iter = np.max(self.i) * self.j
         for n in range(max_iter):
             if n == max_iter - 1:
                 return False
@@ -222,19 +232,20 @@ class JobShop:
         change = 0
         for m in range(self.m):
             try:
-                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2])
+                max_pos = np.max((np.where(self.y_jirm[:][:, :, m] == 1))[2])
 
                 for r in range(max_pos):
-                    j1 = np.where(self.y_jirm[:, :, r, m] == 1)[0]
-                    i1 = np.where(self.y_jirm[:, :, r, m] == 1)[1]
-                    j2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[0]
-                    i2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[1]
-                    if self.starting_time_ij[i2, j2] < self.completion_time_ij[i1, j1]:
+                    j1 = np.where(self.y_jirm[:][:, r, m] == 1)[0]
+                    i1 = np.where(self.y_jirm[:][:, r, m] == 1)[1]
+                    j2 = np.where(self.y_jirm[:][:, r + 1, m] == 1)[0]
+                    i2 = np.where(self.y_jirm[:][:, r + 1, m] == 1)[1]
+                    if self.starting_time_ij[j2][i2] < self.completion_time_ij[j1][i1]:
                         difference = (
-                            self.completion_time_ij[i1, j1] - self.starting_time_ij[i2, j2]
+                            self.completion_time_ij[j1][i1]
+                            - self.starting_time_ij[j2][i2]
                         )
-                        self.starting_time_ij[i2, j2] += difference
-                        self.completion_time_ij[i2, j2] += difference
+                        self.starting_time_ij[j2][i2] += difference
+                        self.completion_time_ij[j2][i2] += difference
                         change += 1
             except:
                 pass
@@ -247,13 +258,13 @@ class JobShop:
     def _schedule_ij(self):
         change = 0
         for j in range(self.j):
-            for i in range(self.i - 1):
-                if self.starting_time_ij[i + 1, j] < self.completion_time_ij[i, j]:
+            for i in range(self.i[j] - 1):
+                if self.starting_time_ij[j][i + 1] < self.completion_time_ij[j][i]:
                     difference = (
-                        self.completion_time_ij[i, j] - self.starting_time_ij[i + 1, j]
+                        self.completion_time_ij[j][i] - self.starting_time_ij[j][i + 1]
                     )
-                    self.starting_time_ij[i + 1, j] += difference
-                    self.completion_time_ij[i + 1, j] += difference
+                    self.starting_time_ij[j][i + 1] += difference
+                    self.completion_time_ij[j][i + 1] += difference
                     change += 1
         if change == 0:
             return True
@@ -293,8 +304,8 @@ class JobShop:
         decision = []
         # Determine operations able to be processed on multiple machines
         for j in range(self.j):
-            for i in range(self.i):
-                indices = np.nonzero(self.processing_time[j, i, :])
+            for i in range(self.i[j]):
+                indices = np.nonzero(self.processing_time[j][i, :])
                 if np.size(indices[0]) > 1:
                     selection.append([j, i, indices])
         # Randomly select i,j
@@ -306,8 +317,8 @@ class JobShop:
         j = (selection[choice])[0]
         i = (selection[choice])[1]
         # Get current machine
-        current_machine = int(np.where(self.y_jirm[j, i, :, :] == 1)[1])
-        current_position = int(np.where(self.y_jirm[j, i, :, :] == 1)[0])
+        current_machine = int(np.where(self.y_jirm[j][i, :, :] == 1)[1])
+        current_position = int(np.where(self.y_jirm[j][i, :, :] == 1)[0])
         # Randomly select new machine
         machines = ((selection[choice])[2])[0]
         while True:
@@ -315,34 +326,38 @@ class JobShop:
             if new_machine != current_machine:
                 break
         # Try every position on new machine and select the one with smallest makespan
-        r_max = np.max((np.where(self.y_jirm[:, :, :, new_machine] == 1))[2]) + 1
-        for r_new in range(r_max + 1):  # +1 because operation can also be set to the last position on new machine
+        r_max = self._determine_max_position(new_machine)
+        for r_new in range(
+            r_max + 1
+        ):  # +1 because operation can also be set to the last position on new machine
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             for r in range(self.r):
-                if r == r_new:
-                    new_y[:, :, r, new_machine] = self.y_jirm[
-                        :, :, current_position, current_machine
-                    ]
-                elif r > r_new:
-                    new_y[:, :, r, new_machine] = self.y_jirm[:, :, r - 1, new_machine]
-                else:
-                    new_y[:, :, r, new_machine] = self.y_jirm[:, :, r, new_machine]
+                for j in range(self.j):
+                    if r == r_new:
+                        new_y[j][:, r, new_machine] = self.y_jirm[j][
+                            :, current_position, current_machine
+                        ]
+                    elif r > r_new:
+                        new_y[j][:, r, new_machine] = self.y_jirm[j][:, r - 1, new_machine]
+                    else:
+                        new_y[j][:, r, new_machine] = self.y_jirm[j][:, r, new_machine]
 
             for r in range(self.r):
-                if r == self.r - 1:
-                    new_y[:, :, r, current_machine] = 0
-                elif r >= current_position:
-                    new_y[:, :, r, current_machine] = self.y_jirm[
-                        :, :, r + 1, current_machine
-                    ]
-                else:
-                    new_y[:, :, r, current_machine] = self.y_jirm[
-                        :, :, r, current_machine
-                    ]
+                for j in range(self.j):
+                    if r == self.r - 1:
+                        new_y[j][:, r, current_machine] = 0
+                    elif r >= current_position:
+                        new_y[j][:, r, current_machine] = self.y_jirm[j][
+                            :, r + 1, current_machine
+                        ]
+                    else:
+                        new_y[j][:, r, current_machine] = self.y_jirm[j][
+                            :, r, current_machine
+                        ]
             # Generate new y_jirm
             self.y_jirm = copy.deepcopy(new_y)
             decision.append(self.calculate_fitness_function())
-            #if self._check_feasibility() is not True:
+            # if self._check_feasibility() is not True:
             #    raise ValueError('Generated solution is not feasible!!!')
             makespan.append([decision[-1], new_y])
             # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
@@ -362,24 +377,22 @@ class JobShop:
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
-        while True:
-            m = np.random.randint(0, self.m)
-            # select a position on this machine
-            try:
-                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
-                break
-            except:
-                pass
+        max_pos = 0
+        m = np.random.randint(0, self.m)
+        max_pos = self._determine_max_position(m)
+        if max_pos <= 1:
+            return None
         r_swap = np.random.randint(0, max_pos)
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
             if r != r_swap:  # TODO: Additionally, check if move is in tabu list
-                # reset self.y_jirm
-                self.y_jirm = copy.deepcopy(initial_y_jirm)
-                # swap self.y_jirm[:,:,r,m] with self.y_jirm[:,:,r_swap,m]
-                swap = np.copy(self.y_jirm[:, :, r_swap, m])
-                self.y_jirm[:, :, r_swap, m] = self.y_jirm[:, :, r, m]
-                self.y_jirm[:, :, r, m] = swap
+                for j in range(self.j):
+                    # reset self.y_jirm
+                    self.y_jirm = copy.deepcopy(initial_y_jirm)
+                    # swap self.y_jirm[:,:,r,m] with self.y_jirm[:,:,r_swap,m]
+                    swap = np.copy(self.y_jirm[j][:, r_swap, m])
+                    self.y_jirm[j][:, r_swap, m] = self.y_jirm[j][:, r, m]
+                    self.y_jirm[j][:, r, m] = swap
 
                 makespan = self.calculate_fitness_function()
                 # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
@@ -407,30 +420,27 @@ class JobShop:
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
-        while True:
-            m = np.random.randint(0, self.m)
-            # select a position on this machine
-            try:
-                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
-                break
-            except:
-                pass
+        m = np.random.randint(0, self.m)
+        max_pos = self._determine_max_position(m)
+        if max_pos <= 1:
+            return None
         r_insert = np.random.randint(0, max_pos)
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
             if r != r_insert:  # TODO: Additionally, check if move is in tabu list
-                # reset self.y_jirm
-                self.y_jirm = copy.deepcopy(initial_y_jirm)
-                new_y = copy.deepcopy(initial_y_jirm)
-                for rr in range(self.r):
-                    if rr == r:
-                        new_y[:, :, rr, m] = self.y_jirm[:, :, r_insert, m]
-                    elif r_insert <= rr < r:  # Movement to right hand side
-                        new_y[:, :, rr, m] = self.y_jirm[:, :, rr + 1, m]
-                    elif r < rr <= r_insert:  # Movement to left hand side
-                        new_y[:, :, rr, m] = self.y_jirm[:, :, rr - 1, m]
-                    else:
-                        new_y[:, :, rr, m] = self.y_jirm[:, :, rr, m]
+                for j in range(self.j):
+                    # reset self.y_jirm
+                    self.y_jirm = copy.deepcopy(initial_y_jirm)
+                    new_y = copy.deepcopy(initial_y_jirm)
+                    for rr in range(self.r):
+                        if rr == r:
+                            new_y[j][:, rr, m] = self.y_jirm[j][:, r_insert, m]
+                        elif r_insert <= rr < r:  # Movement to right hand side
+                            new_y[j][:, rr, m] = self.y_jirm[j][:, rr + 1, m]
+                        elif r < rr <= r_insert:  # Movement to left hand side
+                            new_y[j][:, rr, m] = self.y_jirm[j][:, rr - 1, m]
+                        else:
+                            new_y[j][:, rr, m] = self.y_jirm[j][:, rr, m]
                 self.y_jirm = copy.deepcopy(new_y)
 
                 makespan = self.calculate_fitness_function()
@@ -483,8 +493,8 @@ class JobShop:
         # First feasibility check
         # Returns True if an operation of a job is only assigned to a machine where this operation is possible.
         # Word sheet equation 3: \sum_r^J y_jirm <= f_jim
-        machine_feasibility = np.array(self.processing_time, dtype=bool)
-        y_ijm = np.sum(self.y_jirm, axis=2)
+        machine_feasibility = np.array(self.processing_time[:], dtype=bool)
+        y_ijm = np.sum(self.y_jirm[0], axis=2)
         it = np.nditer(y_ijm, flags=["multi_index"])
         for x in it:
             x = int(x)
@@ -517,6 +527,18 @@ class JobShop:
 
         return True
 
+    def _determine_max_position(self, machine):
+        max_pos = []
+        for j in range(self.j):
+            index = np.where(self.y_jirm[j][:, :, machine] == 1)[1]
+            if index.size != 0:
+                max_pos.append(int(index) + 1)
+        if len(max_pos) == 0:
+            max_pos = 1
+        else:
+            max_pos = np.max(max_pos)
+        return max_pos
+
     def _estimating_initial_domains(self):
         """
         Domains for operations, jobs, positions and machines are estimated based on the parameter processing time.
@@ -530,17 +552,31 @@ class JobShop:
         """
 
         initial_length = np.sum(self.processing_time)
-        self.i = np.shape(self.processing_time)[1]
+
         self.j = np.shape(self.processing_time)[0]
         self.m = np.shape(self.processing_time)[2]
-        self.r = int(
-            np.max(
-                np.sum(
-                    np.sum(np.array(self.processing_time, dtype=bool), axis=0), axis=0
+        self.r = (
+            int(
+                np.max(
+                    np.sum(
+                        np.sum(np.array(self.processing_time, dtype=bool), axis=0),
+                        axis=0,
+                    )
                 )
             )
-        ) * 3
-        self.shape = [self.j, self.i, self.r, self.m]
+            * 3
+        )
+
+        self.i = []
+        new_processing_time = []
+        for j in range(self.j):
+            processing_time = self.processing_time[j, :, :]
+            self.i.append(
+                np.shape(processing_time[~np.all(processing_time == 0, axis=1)])[0]
+            )
+            new_processing_time.append(processing_time[~np.all(processing_time == 0, axis=1)])
+        self.processing_time = copy.deepcopy(new_processing_time)
+        # self.shape = [self.j, self.i, self.r, self.m]
         self.colors = self._generate_colors()
         return initial_length
 
@@ -563,37 +599,44 @@ class JobShop:
         Returns:
             priority_list (array): First column containing job index and second column the total completion time
         """
-        p_ij = np.zeros((self.i, self.j))
+        p_ji = []
+        for j in range(self.j):
+            p_ji.append(np.zeros((self.i[j])))
+
         weights = []  # initialize weights list
         # loop over all indices of processing time
-        for i in range(self.i):
-            for j in range(self.j):
+        for j in range(self.j):
+            for i in range(self.i[j]):
                 for m in range(self.m):
-                    weights.append(self.processing_time[j, i, m])
+                    weights.append(self.processing_time[j][i, m])
                 weights = weights / np.sum(
                     weights
                 )  # normalize weights, that sum(weights) = 1
                 indices = np.arange(self.m)  # machine indices from 0 to self.m
                 if math.isnan(weights[0]):
-                    p_ij[i, j] = 0
+                    p_ji[j][i] = 0
                 else:
                     machine_index = np.random.choice(
                         indices, p=weights
                     )  # randomly select a machine, w.r.t. weights
-                    p_ij[i, j] = self.processing_time[
-                        j, i, machine_index
+                    p_ji[j][i] = self.processing_time[
+                        j][i, machine_index
                     ]  # store processing time in reduced array
                 weights = []  # reset weights
         #  --------------------------------------------------------------------
-        total_time = np.sum(
-            p_ij, axis=0
-        )  # calculate total completion time for each job (sum over i)
+        total_time = []
+        for j in range(self.j):
+            total_time.append(np.sum(p_ji[j]))
+
+        # total_time = np.sum(
+        #    p_ji, axis=0
+        # )  # calculate total completion time for each job (sum over i)
         job_index = np.arange(self.j)  # job indices from 0 to self.j
         sort = np.argsort(
             total_time
         )  # get indices of sorted processing time (no explicit tiebreaker considered)
         priority_list = np.column_stack(
-            (job_index[sort], total_time[sort])
+            (job_index[sort], np.array(total_time)[sort])
         )  # generate priority list
 
         return priority_list
@@ -615,19 +658,22 @@ class JobShop:
         Returns:
 
         """
-        self.y_jirm = np.zeros(self.shape)  # initialize decision variable
+        self.y_jirm = []  # initialize decision variable
+        for j in range(self.j):
+            self.y_jirm.append(np.zeros((self.i[j], self.r, self.m)))
+
         machine_position = np.array(
             [0] * self.m
         )  # list to store used machine positions
         for job_index in priority_list[:, 0]:  # loop over priority list
             job_index = int(job_index)
-            for i in range(self.i):  # loop over operations
+            for i in range(self.i[job_index]):  # loop over operations
                 machine_index = []  # reset machine index
                 for m in range(self.m):  # loop over machine
                     if (  # check if pair [i,j] is feasible on this machine
                         any(
                             np.ndarray(
-                                self.processing_time[job_index, i, m], dtype=bool
+                                self.processing_time[job_index][i, m], dtype=bool
                             )
                         )
                         is True
@@ -635,8 +681,10 @@ class JobShop:
                         machine_index.append(
                             m
                         )  # if feasible, assign machine to possible machines
+
+                # The following if statement should remain unused. Only the else part is necessary
                 if not machine_index:
-                    machine_choice = np.arange(self.m)
+                    machine_choice = 0
                 else:
                     machine_choice = machine_index[
                         np.argmin(
@@ -644,8 +692,8 @@ class JobShop:
                         )  # get the minimum of machine position and choose this machine
                     ]
                 # set decision variable to one for [i,j] on the determined position and machine
-                self.y_jirm[
-                    job_index, i, machine_position[machine_choice], machine_choice
+                self.y_jirm[job_index][
+                    i, machine_position[machine_choice], machine_choice
                 ] = 1
                 machine_position[machine_choice] += 1
 
@@ -672,12 +720,12 @@ class JobShop:
 
         for j in range(self.j):
             for m in range(self.m):
-                for i in range(self.i):
-                    if any(np.array(self.y_jirm[j, i, :, m], dtype=bool)) is True:
+                for i in range(self.i[j]):
+                    if any(np.array(self.y_jirm[j][i, :, m], dtype=bool)) is True:
                         entry = dict(
                             Task=str(m),
-                            Start=str(self.starting_time_ij[i, j]),
-                            Finish=str(self.completion_time_ij[i, j]),
+                            Start=str(self.starting_time_ij[j][i]),
+                            Finish=str(self.completion_time_ij[j][i]),
                             Resource="job " + str(j),
                         )
                         df.append(entry)
@@ -739,16 +787,18 @@ if __name__ == "__main__":
     # processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
     # processing_time_input = extract_csv(processing_time_path, 3)
 
-    processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/parameter/Taktzeit.csv"
+    processing_time_path = (
+        "/Users/q517174/PycharmProjects/Optiflex/parameter/Taktzeit.csv"
+    )
     variants_of_interest = ["B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [1, 0, 0]
+    amount_of_variants = [2, 2, 2]
     processing_time_input = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants
     )
 
     # After read in everything the object can be created and the main_run can start
     job_shop_object = JobShop(
-        processing_time=processing_time_input[:,1:,:],
-        max_iter=100,
+        processing_time=processing_time_input[:, 1:, :],
+        max_iter=300,
     )
     job_shop_object.main_run()
