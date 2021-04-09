@@ -1,12 +1,19 @@
 import pandas as pd
 import numpy as np
 import time
+import math
 import matplotlib.pyplot as plt
 import copy
 import pyfiglet
 from alive_progress import alive_bar
 
+from extract_csv import extract_parameter
 
+# TODO: Generate new input parameter array for processing time put of real data
+# TODO: Further testing the code for basic model
+# TODO: Implementation of the maintenance sub-model
+# TODO: Write pseudo code
+# TODO: Constraint neighborhood for larger data set
 """
 Tabu Search algorithm for solving complex job shop scheduling problems.
 As a first step, only the basic model is considered as described in the specification word sheet.
@@ -169,8 +176,8 @@ class JobShop:
                         addition += (
                             processing_time[j, i, r, m] * self.y_jirm[j, i, r, m]
                         )
-                        if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
-                            raise ValueError('Something is wrong in Equation 1')
+                        #if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
+                        #    raise ValueError('Something is wrong in Equation 1')
 
                 self.starting_time_rm[r + 1, m] = self.starting_time_rm[r, m] + addition
                 self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
@@ -214,19 +221,23 @@ class JobShop:
     def _schedule_rm(self):
         change = 0
         for m in range(self.m):
-            max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2])
-            for r in range(max_pos):
-                j1 = np.where(self.y_jirm[:, :, r, m] == 1)[0]
-                i1 = np.where(self.y_jirm[:, :, r, m] == 1)[1]
-                j2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[0]
-                i2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[1]
-                if self.starting_time_ij[i2, j2] < self.completion_time_ij[i1, j1]:
-                    difference = (
-                        self.completion_time_ij[i1, j1] - self.starting_time_ij[i2, j2]
-                    )
-                    self.starting_time_ij[i2, j2] += difference
-                    self.completion_time_ij[i2, j2] += difference
-                    change += 1
+            try:
+                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2])
+
+                for r in range(max_pos):
+                    j1 = np.where(self.y_jirm[:, :, r, m] == 1)[0]
+                    i1 = np.where(self.y_jirm[:, :, r, m] == 1)[1]
+                    j2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[0]
+                    i2 = np.where(self.y_jirm[:, :, r + 1, m] == 1)[1]
+                    if self.starting_time_ij[i2, j2] < self.completion_time_ij[i1, j1]:
+                        difference = (
+                            self.completion_time_ij[i1, j1] - self.starting_time_ij[i2, j2]
+                        )
+                        self.starting_time_ij[i2, j2] += difference
+                        self.completion_time_ij[i2, j2] += difference
+                        change += 1
+            except:
+                pass
 
         if change == 0:
             return True
@@ -331,8 +342,8 @@ class JobShop:
             # Generate new y_jirm
             self.y_jirm = copy.deepcopy(new_y)
             decision.append(self.calculate_fitness_function())
-            if self._check_feasibility() is not True:
-                raise ValueError('Generated solution is not feasible!!!')
+            #if self._check_feasibility() is not True:
+            #    raise ValueError('Generated solution is not feasible!!!')
             makespan.append([decision[-1], new_y])
             # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
             print("Makespan of new machine assignment: {}".format(makespan[-1][0]))
@@ -351,9 +362,14 @@ class JobShop:
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
-        m = np.random.randint(0, self.m)
-        # select a position on this machine
-        max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
+        while True:
+            m = np.random.randint(0, self.m)
+            # select a position on this machine
+            try:
+                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
+                break
+            except:
+                pass
         r_swap = np.random.randint(0, max_pos)
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
@@ -391,9 +407,14 @@ class JobShop:
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
-        m = np.random.randint(0, self.m)
-        # select a position on this machine
-        max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
+        while True:
+            m = np.random.randint(0, self.m)
+            # select a position on this machine
+            try:
+                max_pos = np.max((np.where(self.y_jirm[:, :, :, m] == 1))[2]) + 1
+                break
+            except:
+                pass
         r_insert = np.random.randint(0, max_pos)
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
@@ -518,7 +539,7 @@ class JobShop:
                     np.sum(np.array(self.processing_time, dtype=bool), axis=0), axis=0
                 )
             )
-        ) + 1
+        ) * 3
         self.shape = [self.j, self.i, self.r, self.m]
         self.colors = self._generate_colors()
         return initial_length
@@ -553,12 +574,15 @@ class JobShop:
                     weights
                 )  # normalize weights, that sum(weights) = 1
                 indices = np.arange(self.m)  # machine indices from 0 to self.m
-                machine_index = np.random.choice(
-                    indices, p=weights
-                )  # randomly select a machine, w.r.t. weights
-                p_ij[i, j] = self.processing_time[
-                    j, i, machine_index
-                ]  # store processing time in reduced array
+                if math.isnan(weights[0]):
+                    p_ij[i, j] = 0
+                else:
+                    machine_index = np.random.choice(
+                        indices, p=weights
+                    )  # randomly select a machine, w.r.t. weights
+                    p_ij[i, j] = self.processing_time[
+                        j, i, machine_index
+                    ]  # store processing time in reduced array
                 weights = []  # reset weights
         #  --------------------------------------------------------------------
         total_time = np.sum(
@@ -611,11 +635,14 @@ class JobShop:
                         machine_index.append(
                             m
                         )  # if feasible, assign machine to possible machines
-                machine_choice = machine_index[
-                    np.argmin(
-                        machine_position[machine_index]
-                    )  # get the minimum of machine position and choose this machine
-                ]
+                if not machine_index:
+                    machine_choice = np.arange(self.m)
+                else:
+                    machine_choice = machine_index[
+                        np.argmin(
+                            machine_position[machine_index]
+                        )  # get the minimum of machine position and choose this machine
+                    ]
                 # set decision variable to one for [i,j] on the determined position and machine
                 self.y_jirm[
                     job_index, i, machine_position[machine_choice], machine_choice
@@ -709,12 +736,19 @@ def extract_csv(file_name, dimension=None):
 
 if __name__ == "__main__":
 
-    processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
-    processing_time_input = extract_csv(processing_time_path, 3)
+    # processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
+    # processing_time_input = extract_csv(processing_time_path, 3)
+
+    processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/parameter/Taktzeit.csv"
+    variants_of_interest = ["B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
+    amount_of_variants = [1, 0, 0]
+    processing_time_input = extract_parameter(
+        processing_time_path, variants_of_interest, amount_of_variants
+    )
 
     # After read in everything the object can be created and the main_run can start
     job_shop_object = JobShop(
-        processing_time=processing_time_input,
+        processing_time=processing_time_input[:,1:,:],
         max_iter=100,
     )
     job_shop_object.main_run()
