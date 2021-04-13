@@ -4,7 +4,7 @@ import numpy as np
 
 def extract_parameter(input_path, variants, amount):
 
-    df = pd.read_csv(input_path, skiprows=8, sep="\t", engine="python", header=None)
+    df = pd.read_csv(input_path, sep="\t", engine="python", header=None)
     afo_list = [
         "AFO005",
         "AFO010",
@@ -30,7 +30,7 @@ def extract_parameter(input_path, variants, amount):
     n = 0
     for name in variants:
         line = 0
-        filtered_table = df[df[3].str.contains(name)]
+        filtered_table = df[df[4].str.match(name)]
         for afo in filtered_table[0]:
             position = np.where(np.asarray(afo_list) == afo)
             if position is []:
@@ -41,7 +41,7 @@ def extract_parameter(input_path, variants, amount):
                 - 1
                 + (position[0] * max_machines)
             )
-            output[n, position, machine] = filtered_table.iloc[line, 5]
+            output[n, position, machine] = filtered_table.iloc[line, 6]
             line += 1
         n += 1
 

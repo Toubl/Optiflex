@@ -9,11 +9,12 @@ from alive_progress import alive_bar
 
 from extract_csv import extract_parameter
 
-# TODO: Generate new input parameter array for processing time put of real data
+# TODO: Generate new input parameter array for processing time out of real data
 # TODO: Further testing the code for basic model
 # TODO: Implementation of the maintenance sub-model
 # TODO: Write pseudo code
 # TODO: Constraint neighborhood for larger data set
+# TODO: Estimate a lower bound for an optimal solution to get an idea of the quality of the initial solution
 """
 Tabu Search algorithm for solving complex job shop scheduling problems.
 As a first step, only the basic model is considered as described in the specification word sheet.
@@ -164,8 +165,10 @@ class JobShop:
         self._equation_5_and_6()
         self.feasibility = self.scheduling()
 
-        makespan = np.max(self.completion_time_ij)
-        return makespan
+        makespan = []
+        for j in range(self.j):
+            makespan.append(np.max(self.completion_time_ij[j]))
+        return max(makespan)
 
     def _equation_1(self):
         processing_time = []
@@ -174,10 +177,6 @@ class JobShop:
             irm = np.swapaxes(irm[:], 1, 2)
             processing_time.append(irm)
 
-        #processing_time = np.repeat(
-        #    self.processing_time[:][:, np.newaxis], self.r, axis=2
-        #)
-        #processing_time = np.swapaxes(processing_time[:], 1, 2)
         for m in range(self.m):
             for r in range(self.r - 1):
                 addition = 0
@@ -186,8 +185,6 @@ class JobShop:
                         addition += (
                             processing_time[j][i, r, m] * self.y_jirm[j][i, r, m]
                         )
-                        # if processing_time[j, i, r, m] == 0 and self.y_jirm[j, i, r, m] == 1:
-                        #    raise ValueError('Something is wrong in Equation 1')
 
                 self.starting_time_rm[r + 1, m] = self.starting_time_rm[r, m] + addition
                 self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
@@ -229,26 +226,37 @@ class JobShop:
         return False
 
     def _schedule_rm(self):
+        j1, j2, i1, i2 = None, None, None, None
         change = 0
         for m in range(self.m):
-            try:
-                max_pos = np.max((np.where(self.y_jirm[:][:, :, m] == 1))[2])
+            max_pos = []
+            for j in range(self.j):
+                index = np.where(self.y_jirm[j][:, :, m] == 1)[1]
+                if len(index) > 0:
+                    max_pos.append(np.max((np.where(self.y_jirm[j][:, :, m] == 1))[1]))
+                else:
+                    max_pos.append(0)
 
-                for r in range(max_pos):
-                    j1 = np.where(self.y_jirm[:][:, r, m] == 1)[0]
-                    i1 = np.where(self.y_jirm[:][:, r, m] == 1)[1]
-                    j2 = np.where(self.y_jirm[:][:, r + 1, m] == 1)[0]
-                    i2 = np.where(self.y_jirm[:][:, r + 1, m] == 1)[1]
-                    if self.starting_time_ij[j2][i2] < self.completion_time_ij[j1][i1]:
-                        difference = (
-                            self.completion_time_ij[j1][i1]
-                            - self.starting_time_ij[j2][i2]
-                        )
-                        self.starting_time_ij[j2][i2] += difference
-                        self.completion_time_ij[j2][i2] += difference
-                        change += 1
-            except:
-                pass
+            for r in range(max(max_pos)):
+                for j in range(self.j):
+                    index1 = np.where(self.y_jirm[j][:, r, m] == 1)[0]
+                    index2 = np.where(self.y_jirm[j][:, r + 1, m] == 1)[0]
+                    if len(index1) > 0:
+                        j1 = j
+                        i1 = index1
+                    if len(index2) > 0:
+                        j2 = j
+                        i2 = index2
+                if j1 is None or j2 is None:
+                    raise Warning
+                if self.starting_time_ij[j2][i2] < self.completion_time_ij[j1][i1]:
+                    difference = (
+                        self.completion_time_ij[j1][i1]
+                        - self.starting_time_ij[j2][i2]
+                    )
+                    self.starting_time_ij[j2][i2] += difference
+                    self.completion_time_ij[j2][i2] += difference
+                    change += 1
 
         if change == 0:
             return True
@@ -283,7 +291,7 @@ class JobShop:
         self._apply_move_type()
 
     def _selecting_move_type(self):
-        if self.iteration_number % 10 == 0:
+        if self.iteration_number % 8 == 0:
             self._move_operation_insert_on_another_machine()
         elif self.iteration_number % 2 == 0:
             self._move_operation_insert_operation_on_one_machine()
@@ -326,9 +334,10 @@ class JobShop:
             if new_machine != current_machine:
                 break
         # Try every position on new machine and select the one with smallest makespan
-        r_max = self._determine_max_position(new_machine)
+        r_max = self._determine_max_position(new_machine) + 1
+
         for r_new in range(
-            r_max + 1
+            r_max
         ):  # +1 because operation can also be set to the last position on new machine
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             for r in range(self.r):
@@ -373,6 +382,12 @@ class JobShop:
         # Calculate new makespan
 
     def _move_operation_position_swap_on_one_machine(self):
+        """
+        Perform a swapping move type on a randomly selected machine. On this machine, one operation i.e. one position
+        is selected randomly and it will change position with all other operations on this machine ona after the other.
+        This generates the neighborhood set. If a new neighbor is better than the currently best, the decision variable
+        will be updated.
+        """
         new_y = None
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
@@ -386,9 +401,9 @@ class JobShop:
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
             if r != r_swap:  # TODO: Additionally, check if move is in tabu list
+                # reset self.y_jirm
+                self.y_jirm = copy.deepcopy(initial_y_jirm)
                 for j in range(self.j):
-                    # reset self.y_jirm
-                    self.y_jirm = copy.deepcopy(initial_y_jirm)
                     # swap self.y_jirm[:,:,r,m] with self.y_jirm[:,:,r_swap,m]
                     swap = np.copy(self.y_jirm[j][:, r_swap, m])
                     self.y_jirm[j][:, r_swap, m] = self.y_jirm[j][:, r, m]
@@ -416,7 +431,7 @@ class JobShop:
         # TODO: Add move type to the tabu list
 
     def _move_operation_insert_operation_on_one_machine(self):
-        new_solution = None
+        new_solution, new_y = None, None
         initial_y_jirm = copy.deepcopy(self.y_jirm)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
@@ -428,10 +443,10 @@ class JobShop:
         # swap this position with all others, this gives the neighborhood
         for r in range(max_pos):
             if r != r_insert:  # TODO: Additionally, check if move is in tabu list
+                # reset self.y_jirm
+                self.y_jirm = copy.deepcopy(initial_y_jirm)
+                new_y = copy.deepcopy(initial_y_jirm)
                 for j in range(self.j):
-                    # reset self.y_jirm
-                    self.y_jirm = copy.deepcopy(initial_y_jirm)
-                    new_y = copy.deepcopy(initial_y_jirm)
                     for rr in range(self.r):
                         if rr == r:
                             new_y[j][:, rr, m] = self.y_jirm[j][:, r_insert, m]
@@ -441,7 +456,10 @@ class JobShop:
                             new_y[j][:, rr, m] = self.y_jirm[j][:, rr - 1, m]
                         else:
                             new_y[j][:, rr, m] = self.y_jirm[j][:, rr, m]
-                self.y_jirm = copy.deepcopy(new_y)
+                if new_y is None:
+                    return None
+                else:
+                    self.y_jirm = copy.deepcopy(new_y)
 
                 makespan = self.calculate_fitness_function()
                 # Some inserts are not feasible due to deadlock effects. Thus, invalid solutions occur
@@ -639,6 +657,8 @@ class JobShop:
             (job_index[sort], np.array(total_time)[sort])
         )  # generate priority list
 
+        print('Average lower bound for makespan: {}'.format(priority_list[-1][1]))
+
         return priority_list
 
     def _initial_scheduling(self, priority_list):
@@ -791,14 +811,14 @@ if __name__ == "__main__":
         "/Users/q517174/PycharmProjects/Optiflex/parameter/Taktzeit.csv"
     )
     variants_of_interest = ["B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [2, 2, 2]
+    amount_of_variants = [10, 0, 0]
     processing_time_input = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants
     )
 
     # After read in everything the object can be created and the main_run can start
     job_shop_object = JobShop(
-        processing_time=processing_time_input[:, 1:, :],
+        processing_time=processing_time_input,
         max_iter=300,
     )
     job_shop_object.main_run()
