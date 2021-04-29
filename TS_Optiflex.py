@@ -9,12 +9,12 @@ from alive_progress import alive_bar
 
 from extract_csv import extract_parameter
 
-# TODO: Generate new input parameter array for processing time out of real data
-# TODO: Further testing the code for basic model
 # TODO: Implementation of the maintenance sub-model
-# TODO: Write pseudo code
 # TODO: Constraint neighborhood for larger data set
-# TODO: Estimate a lower bound for an optimal solution to get an idea of the quality of the initial solution
+# TODO: Calculate idle time within job to estimate optimization potential
+# TODO: Invert order of jobs in initial solution
+# TODO: Test new ideas of movetypes
+# TODO: Check that every processing time is greater zero
 """
 Tabu Search algorithm for solving complex job shop scheduling problems.
 As a first step, only the basic model is considered as described in the specification word sheet.
@@ -180,6 +180,9 @@ class JobShop:
         for m in range(self.m):
             for r in range(self.r - 1):
                 addition = 0
+                # TODO: Check if position on machine is production job or maintenance activity, respectively follow
+                #  the same logic for maintenance activity
+
                 for j in range(self.j):
                     for i in range(self.i[j]):
                         addition += (
@@ -248,7 +251,7 @@ class JobShop:
                         j2 = j
                         i2 = index2
                 if j1 is None or j2 is None:
-                    raise Warning
+                    raise ValueError
                 if self.starting_time_ij[j2][i2] < self.completion_time_ij[j1][i1]:
                     difference = (
                         self.completion_time_ij[j1][i1]
@@ -291,9 +294,9 @@ class JobShop:
         self._apply_move_type()
 
     def _selecting_move_type(self):
-        if self.iteration_number % 8 == 0:
+        if self.iteration_number % 2 == 0:
             self._move_operation_insert_on_another_machine()
-        elif self.iteration_number % 2 == 0:
+        elif self.iteration_number % 3 == 0:
             self._move_operation_insert_operation_on_one_machine()
         else:
             self._move_operation_position_swap_on_one_machine()
@@ -310,6 +313,7 @@ class JobShop:
         selection = []
         makespan = []
         decision = []
+        new_solution = None
         # Determine operations able to be processed on multiple machines
         for j in range(self.j):
             for i in range(self.i[j]):
@@ -376,10 +380,14 @@ class JobShop:
             if makespan[-1][0] <= self.make_span[-1]:
                 self.make_span.append(makespan[-1][0])
                 self.optimized_solution = copy.deepcopy(new_y)
-
-        minimum = int(np.argmin(decision))
-        self.y_jirm = copy.deepcopy((makespan[minimum])[1])
+                new_solution = copy.deepcopy(new_y)
+                minimum = int(np.argmin(decision))
+                self.y_jirm = copy.deepcopy((makespan[minimum])[1])
         # Calculate new makespan
+        if new_solution is not None:
+            self.y_jirm = copy.deepcopy(new_solution)
+        else:
+            self.y_jirm = copy.deepcopy(initial_y_jirm)
 
     def _move_operation_position_swap_on_one_machine(self):
         """
@@ -631,20 +639,18 @@ class JobShop:
                     weights
                 )  # normalize weights, that sum(weights) = 1
                 indices = np.arange(self.m)  # machine indices from 0 to self.m
-                if math.isnan(weights[0]):
-                    p_ji[j][i] = 0
-                else:
-                    machine_index = np.random.choice(
-                        indices, p=weights
-                    )  # randomly select a machine, w.r.t. weights
-                    p_ji[j][i] = self.processing_time[
-                        j][i, machine_index
-                    ]  # store processing time in reduced array
+
+                machine_index = np.random.choice(
+                    indices, p=weights
+                )  # randomly select a machine, w.r.t. weights
+                p_ji[j][i] = self.processing_time[
+                    j][i, machine_index
+                ]  # store processing time in reduced array
                 weights = []  # reset weights
         #  --------------------------------------------------------------------
         total_time = []
         for j in range(self.j):
-            total_time.append(np.sum(p_ji[j]))
+            total_time.append(-np.sum(p_ji[j]))
 
         # total_time = np.sum(
         #    p_ji, axis=0
@@ -690,14 +696,7 @@ class JobShop:
             for i in range(self.i[job_index]):  # loop over operations
                 machine_index = []  # reset machine index
                 for m in range(self.m):  # loop over machine
-                    if (  # check if pair [i,j] is feasible on this machine
-                        any(
-                            np.ndarray(
-                                self.processing_time[job_index][i, m], dtype=bool
-                            )
-                        )
-                        is True
-                    ):
+                    if self.processing_time[job_index][i, m] > 0:
                         machine_index.append(
                             m
                         )  # if feasible, assign machine to possible machines
@@ -807,16 +806,14 @@ if __name__ == "__main__":
     # processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
     # processing_time_input = extract_csv(processing_time_path, 3)
 
-    processing_time_path = (
-        "/Users/q517174/PycharmProjects/Optiflex/parameter/Taktzeit.csv"
-    )
-    variants_of_interest = ["B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [10, 0, 0]
+    processing_time_path = "parameter/Takzeit_overview.xlsx"
+    variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
+    amount_of_variants = [10, 10, 10, 10]
     processing_time_input = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants
     )
 
-    # After read in everything the object can be created and the main_run can start
+    # After read in everything, the object can be created and the main_run can start
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         max_iter=300,
