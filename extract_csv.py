@@ -3,7 +3,7 @@ import numpy as np
 import copy
 
 
-def extract_parameter(input_path, variants, amount):
+def extract_parameter(input_path, variants, amount, maintenance=None):
 
     df = pd.read_excel(input_path, skiprows=0, header=0, sheet_name='Sheet2')
     afo_list = [
@@ -56,7 +56,27 @@ def extract_parameter(input_path, variants, amount):
         job += number
         var += 1
 
-    return p_jim.astype(int)
+    d_mw = None
+    if maintenance is not None:
+        df_maint = pd.read_excel(input_path, skiprows=0, header=0, sheet_name='Maintenance')
+        maintenance_activities = len(df_maint.columns) - 2
+        d_mw = np.zeros((max_machines * len(afo_list), maintenance_activities))
+        line = 0
+        for afo in df_maint['AFO']:
+            position = np.where(np.asarray(afo_list) == afo)
+            if position is []:
+                afo_list.append(afo)
+                position = len(afo_list) - 1
+            machine = (
+                int((df.iloc[line, 1]))
+                - 1
+                + (position[0] * max_machines)
+            )
+            d_mw[machine, :] = df_maint.iloc[line, 2:]
+            line += 1
+        n += 1
+
+    return p_jim.astype(int), d_mw
 
 
 def generate_new_list(input_path):
@@ -88,7 +108,7 @@ amount_of_variants = [3, 3, 3, 3]
 # new_df.to_excel(r'parameter/Takzeit_overview.xlsx', index=False)
 
 processing_time_jim = extract_parameter(
-    processing_time_path, variants_of_interest, amount_of_variants
+    processing_time_path, variants_of_interest, amount_of_variants, maintenance=True
 )
 
 b = 0
