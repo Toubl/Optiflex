@@ -59,8 +59,7 @@ def extract_parameter(input_path, variants, amount, maintenance=None):
     d_mw = None
     if maintenance is not None:
         df_maint = pd.read_excel(input_path, skiprows=0, header=0, sheet_name='Maintenance')
-        maintenance_activities = len(df_maint.columns) - 2
-        d_mw = np.zeros((max_machines * len(afo_list), maintenance_activities))
+        d_mw = [None]*(max_machines * len(afo_list))
         line = 0
         for afo in df_maint['AFO']:
             position = np.where(np.asarray(afo_list) == afo)
@@ -72,7 +71,11 @@ def extract_parameter(input_path, variants, amount, maintenance=None):
                 - 1
                 + (position[0] * max_machines)
             )
-            d_mw[machine, :] = df_maint.iloc[line, 2:]
+            maintenance_list = []
+            for duration in df_maint.iloc[line, 2:]:
+                if duration > 0:
+                    maintenance_list.append(duration)
+            d_mw[machine[0]] = maintenance_list
             line += 1
         n += 1
 
@@ -100,7 +103,7 @@ def generate_new_list(input_path):
 
         line += 1
     return new_df
-
+"""
 processing_time_path = "parameter/Takzeit_overview.xlsx"
 variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
 amount_of_variants = [3, 3, 3, 3]
@@ -112,3 +115,4 @@ processing_time_jim = extract_parameter(
 )
 
 b = 0
+"""

@@ -70,6 +70,7 @@ class JobShop:
         self.machine_time = None
         self.starting_time_mw = None
         self.completion_time_mw = None
+        self.z_mu = None
 
         self.feasibility = None
         self.start_time = None
@@ -94,9 +95,9 @@ class JobShop:
         print(header)
 
         self.generate_initial_solution()
-        makespan = self.calculate_fitness_function()
+        makespan = 0  # self.calculate_fitness_function()
         self.make_span.append(makespan)
-        print("Makespan of initial solution: {}".format(makespan))
+        # print("Makespan of initial solution: {}".format(makespan))
         self.plot_gantt_chart(
             group=True,
             title="Initial Scheduling with a makespan of {}".format(makespan),
@@ -612,7 +613,27 @@ class JobShop:
         self.processing_time = copy.deepcopy(new_processing_time)
         # self.shape = [self.j, self.i, self.r, self.m]
         self.colors = self._generate_colors()
+
+        if self.maintenance_duration is not None:
+            self.z_mu = np.zeros((self.m, 90000))
         return initial_length
+
+    def initialize_times(self):
+        self.starting_time_rm = np.zeros((self.r, self.m))
+        self.starting_time_rm[0, :] = 0
+        self.completion_time_rm = np.zeros((self.r, self.m))
+        self.starting_time_ij = []  # np.zeros((self.i, self.j))
+        self.completion_time_ij = []  # np.zeros((self.i, self.j))
+        # self.starting_time_mw = copy.deepcopy(self.maintenance_duration)
+        # self.completion_time_mw = copy.deepcopy(self.maintenance_duration)
+        self.starting_time_mw = [[] for _ in np.arange(len(self.maintenance_duration))]
+        self.completion_time_mw = [
+            [] for _ in np.arange(len(self.maintenance_duration))
+        ]
+
+        for j in range(self.j):
+            self.starting_time_ij.append(np.zeros((self.i[j])))
+            self.completion_time_ij.append(np.zeros((self.i[j])))
 
     def _generate_priority_list(self):
         """
@@ -633,6 +654,8 @@ class JobShop:
         Returns:
             priority_list (array): First column containing job index and second column the total completion time
         """
+        self.initialize_times()
+
         p_ji = []
         for j in range(self.j):
             p_ji.append(np.zeros((self.i[j])))
@@ -702,11 +725,18 @@ class JobShop:
         self.machine_position = np.array(
             [0] * self.m
         )  # list to store used machine positions
-        self.schedule_operation(0)  # schedule first job on all machines
+        self.schedule_operation(
+            int(priority_list[0, 0])
+        )  # schedule first job on all machines
 
         for job_index in priority_list[1:, 0]:  # loop over priority list
             job_index = int(job_index)
             self.schedule_operation(job_index)
+        #for m in range(self.m):
+        #    if any(self.maintenance_duration[m] != 0):
+        #        raise ValueError(
+        #            "Maintenance scheduling is not feasible! \n Update input data for maintenance!"
+        #        )
 
     def schedule_operation(self, job_index):
         for i in range(self.i[job_index]):  # loop over operations
@@ -731,46 +761,75 @@ class JobShop:
 
     def time_calculation(self, machine, job, operation):
         position = self.machine_position[machine]
-        self.starting_time_ij[operation, job] = copy.deepcopy(
+        self.starting_time_ij[job][operation] = copy.deepcopy(
             self.machine_time[machine]
         )
-        self.completion_time_ij[operation, job] = (
+        self.completion_time_ij[job][operation] = (
             self.machine_time[machine] + self.processing_time[job][operation, machine]
         )
         if operation > 0:
             diff = (
-                self.completion_time_ij[operation - 1, job]
-                - self.starting_time_ij[operation, job]
+                self.completion_time_ij[job][operation - 1]
+                - self.starting_time_ij[job][operation]
             )
             if diff > 0:
-                self.starting_time_ij[operation, job] += diff
-                self.completion_time_ij[operation, job] += diff
+                self.starting_time_ij[job][operation] += diff
+                self.completion_time_ij[job][operation] += diff
 
+        self.machine_time[machine] = copy.deepcopy(
+            self.completion_time_ij[job][operation]
+        )
         self.schedule_maintenance(machine, operation, job)
 
     def schedule_maintenance(self, machine, operation, job):
         # check if maintenance is necessary for this machine
-        if any(self.maintenance_duration[machine, :] != 0):
-            for maintenance_w in range(len(self.maintenance_duration[machine, :])):
-                if self.maintenance_duration[machine, maintenance_w] != 0:
-                    self.starting_time_mw[machine, maintenance_w] = copy.deepcopy(
-                        self.machine_time[machine]
+        if self.maintenance_duration[machine] is not None:
+            for maintenance_w in range(len(self.maintenance_duration[machine][:])):
+                if self.maintenance_duration[machine][maintenance_w] != 0:
+                    start = copy.deepcopy(self.machine_time[machine][0])
+                    # TODO: Check the earliest starting time on which a maintenance activity can be scheduled without
+                    #  violating the maximum simultaneous maintenance constraint
+                    period = 10
+                    periods = 0
+                    max_simultaneous = 5
+                    required_periods = self.maintenance_duration[machine][maintenance_w]/period
+                    earliest_start = start
+                    """
+                    for p in range(int(start/period), 90000):
+                        # count number of maintenance in this period p:
+                        simultaneous_maintenance = np.sum(self.z_mu, axis=0)[p]  # in period p
+                        if simultaneous_maintenance > max_simultaneous:
+                            earliest_start = (p + 1) * period
+                            periods = 0
+                        else:
+                            periods += 1
+                        if (
+                            periods >= required_periods
+                        ):
+                            break
+                    """
+                    self.starting_time_mw[machine].append(earliest_start)
+                    self.completion_time_mw[machine].append(
+                        earliest_start + self.maintenance_duration[machine][maintenance_w]
                     )
-
-                    self.completion_time_mw[machine, maintenance_w] = (
-                        self.starting_time_mw[machine, maintenance_w]
-                        + self.maintenance_duration[machine, maintenance_w]
-                    )
-
-                    self.machine_time[machine] = copy.deepcopy(
-                        self.completion_time_mw[machine, maintenance_w]
-                    )
-                    self.maintenance_duration[machine, maintenance_w] = 0
+                    machine_time = copy.deepcopy(self.maintenance_duration[machine][maintenance_w])
+                    self.machine_time[machine] = earliest_start + machine_time
+                    self.maintenance_duration[machine][maintenance_w] = 0
+                    # generate z_mu:
+                    start_index = int(self.starting_time_mw[machine][maintenance_w] / period)
+                    end_index = int(self.completion_time_mw[machine][maintenance_w] / period)
+                    self.z_mu[machine, start_index:end_index] += 1
+                    if any(self.z_mu[machine, :] > 1):
+                        raise ValueError('Maintenance overlap!!! Abort...')
                     break
         else:
             self.machine_time[machine] = copy.deepcopy(
-                self.completion_time_ij[operation, job]
+                self.completion_time_ij[job][operation]
             )
+
+    def count_simultaneous_maintenance(self, period):
+        for m in range(self.m):
+            pass
 
     def plot_gantt_chart(self, group=False, title="Gantt_Chart"):
         """
@@ -799,11 +858,22 @@ class JobShop:
                     if any(np.array(self.y_jirm[j][i, :, m], dtype=bool)) is True:
                         entry = dict(
                             Task=str(m),
-                            Start=str(self.starting_time_ij[j][i]),
-                            Finish=str(self.completion_time_ij[j][i]),
+                            Start=str((self.starting_time_ij[j][i])),
+                            Finish=str((self.completion_time_ij[j][i])),
                             Resource="job " + str(j),
                         )
                         df.append(entry)
+
+        for m in range(self.m):
+            if self.starting_time_mw[m] is not []:
+                for w in range(len(self.starting_time_mw[m])):
+                    entry = dict(
+                        Task=str(m),
+                        Start=str((self.starting_time_mw[m][w])),
+                        Finish=str((self.completion_time_mw[m][w])),
+                        Resource="Maintenance",
+                    )
+                    df.append(entry)
 
         fig = ff.create_gantt(
             df,
@@ -816,14 +886,18 @@ class JobShop:
         fig.update_traces(
             mode="lines", line_color="black", selector=dict(fill="toself")
         )
-        # for trace in fig.data:
-        #    trace.x += (trace.x[0], trace.x[0], trace.x[0])
-        #    trace.y += (trace.y[-3], trace.y[0], trace.y[0])
+
         fig.show()
 
     def _generate_colors(self):
         colors = []
         for j in range(self.j):
+            r = np.random.randint(0, 255)
+            g = np.random.randint(0, 255)
+            b = np.random.randint(0, 255)
+            colors.append("#%02X%02X%02X" % (r, g, b))
+
+        if self.maintenance_duration is not None:
             r = np.random.randint(0, 255)
             g = np.random.randint(0, 255)
             b = np.random.randint(0, 255)
