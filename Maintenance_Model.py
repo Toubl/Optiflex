@@ -791,14 +791,14 @@ class JobShop:
                     #  violating the maximum simultaneous maintenance constraint
                     period = 10
                     periods = 0
-                    max_simultaneous = 5
+                    max_simultaneous = 1
                     required_periods = self.maintenance_duration[machine][maintenance_w]/period
                     earliest_start = start
-                    """
+                    #"""
                     for p in range(int(start/period), 90000):
                         # count number of maintenance in this period p:
                         simultaneous_maintenance = np.sum(self.z_mu, axis=0)[p]  # in period p
-                        if simultaneous_maintenance > max_simultaneous:
+                        if simultaneous_maintenance >= max_simultaneous:
                             earliest_start = (p + 1) * period
                             periods = 0
                         else:
@@ -807,7 +807,7 @@ class JobShop:
                             periods >= required_periods
                         ):
                             break
-                    """
+                    #"""
                     self.starting_time_mw[machine].append(earliest_start)
                     self.completion_time_mw[machine].append(
                         earliest_start + self.maintenance_duration[machine][maintenance_w]
@@ -858,8 +858,8 @@ class JobShop:
                     if any(np.array(self.y_jirm[j][i, :, m], dtype=bool)) is True:
                         entry = dict(
                             Task=str(m),
-                            Start=str((self.starting_time_ij[j][i])),
-                            Finish=str((self.completion_time_ij[j][i])),
+                            Start=str(float(self.starting_time_ij[j][i])),
+                            Finish=str(float(self.completion_time_ij[j][i])),
                             Resource="job " + str(j),
                         )
                         df.append(entry)
@@ -869,8 +869,8 @@ class JobShop:
                 for w in range(len(self.starting_time_mw[m])):
                     entry = dict(
                         Task=str(m),
-                        Start=str((self.starting_time_mw[m][w])),
-                        Finish=str((self.completion_time_mw[m][w])),
+                        Start=str(float(self.starting_time_mw[m][w])),
+                        Finish=str(float(self.completion_time_mw[m][w])),
                         Resource="Maintenance",
                     )
                     df.append(entry)
