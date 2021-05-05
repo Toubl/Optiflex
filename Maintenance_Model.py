@@ -64,6 +64,7 @@ class JobShop:
         self.iteration_number = 0
         self.priority_list = None
         self.make_span = []
+        self.makespan = None
         self.optimized_solution = None
         self.colors = None
         self.machine_position = None
@@ -71,6 +72,8 @@ class JobShop:
         self.starting_time_mw = None
         self.completion_time_mw = None
         self.z_mu = None
+        self.y_mwr = None
+        self.initial_maintenance_duration = copy.deepcopy(maintenance_duration)
 
         self.feasibility = None
         self.start_time = None
@@ -95,13 +98,19 @@ class JobShop:
         print(header)
 
         self.generate_initial_solution()
-        makespan = 0  # self.calculate_fitness_function()
-        self.make_span.append(makespan)
-        # print("Makespan of initial solution: {}".format(makespan))
+        print(self.makespan)
         self.plot_gantt_chart(
             group=True,
-            title="Initial Scheduling with a makespan of {}".format(makespan),
+            title="Initial Scheduling with a makespan of {}".format(self.makespan),
         )
+
+        self.calculate_fitness_function(0)
+        makespan = []
+        for j in range(self.j):
+            makespan.append(np.max(self.completion_time_ij[j]))
+        self.makespan = max(makespan)
+        self.make_span.append(self.makespan)
+        print('Initial makespan with improved scheduling order: {}'.format(self.makespan))
 
         with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
@@ -109,12 +118,17 @@ class JobShop:
                 bar()
 
         if self.optimized_solution is not None:
-            self.y_jirm = copy.deepcopy(self.optimized_solution)
-            optimized_makespan = self.calculate_fitness_function()
+            self.y_jirm = copy.deepcopy(self.optimized_solution[0])
+            self.y_mwr = copy.deepcopy(self.optimized_solution[1])
+            self.calculate_fitness_function(0)
+            makespan = []
+            for j in range(self.j):
+                makespan.append(np.max(self.completion_time_ij[j]))
+            self.makespan = max(makespan)
             self.plot_gantt_chart(
                 group=True,
                 title="Optimized solution with makespan of {}".format(
-                    optimized_makespan
+                    self.makespan
                 ),
             )
         else:
@@ -142,10 +156,7 @@ class JobShop:
         self.priority_list = self._generate_priority_list()
         self._initial_scheduling(self.priority_list)
 
-        # Do a feasibility check
-        # self._check_feasibility()
-
-    def calculate_fitness_function(self):
+    def calculate_fitness_function(self, machine):
         """
         Function for calculating the fitness value of the current setting of y_jirm. After initializing the
         variables, equation 1, 5 and 6 are called to initially set the helper variables, which are then
@@ -156,136 +167,30 @@ class JobShop:
         Returns:
             makespan (int): Makespan of the current setting of y_jirm
         """
-        # Initialize helper variables with its correct dimensions
-        self.starting_time_rm = np.zeros((self.r, self.m))
-        self.starting_time_rm[0, :] = 0
-        self.completion_time_rm = np.zeros((self.r, self.m))
-        self.starting_time_ij = []  # np.zeros((self.i, self.j))
-        self.completion_time_ij = []  # np.zeros((self.i, self.j))
+        self.machine_time = np.zeros(
+            (self.m, 1)
+        )
+        self.z_mu[machine:, :] = 0
+        self.maintenance_duration = copy.deepcopy(self.initial_maintenance_duration)
 
-        for j in range(self.j):
-            self.starting_time_ij.append(np.zeros((self.i[j])))
-            self.completion_time_ij.append(np.zeros((self.i[j])))
-
-        self._equation_1()
-        self._equation_5_and_6()
-        self.feasibility = self.scheduling()
-
-        makespan = []
-        for j in range(self.j):
-            makespan.append(np.max(self.completion_time_ij[j]))
-        return max(makespan)
-
-    def _equation_1(self):
-        processing_time = []
-        for j in range(self.j):
-            irm = np.repeat(self.processing_time[j][:, :, np.newaxis], self.r, axis=2)
-            irm = np.swapaxes(irm[:], 1, 2)
-            processing_time.append(irm)
-
-        for m in range(self.m):
-            for r in range(self.r - 1):
-                addition = 0
-                # TODO: Check if position on machine is production job or maintenance activity, respectively follow
-                #  the same logic for maintenance activity
-
-                for j in range(self.j):
-                    for i in range(self.i[j]):
-                        addition += (
-                            processing_time[j][i, r, m] * self.y_jirm[j][i, r, m]
-                        )
-
-                self.starting_time_rm[r + 1, m] = self.starting_time_rm[r, m] + addition
-                self.completion_time_rm[r, m] = self.starting_time_rm[r, m] + addition
-
-    def _equation_5_and_6(self):
-        # Transformation from rm to ij over decision variable y
-        for j in range(self.j):
-            for i in range(self.i[j]):
-                for r in range(self.r):
-                    for m in range(self.m):
-                        if self.y_jirm[j][i, r, m] == 1:
-                            self.starting_time_ij[j][i] = self.starting_time_rm[r, m]
-                            self.completion_time_ij[j][i] = self.completion_time_rm[
-                                r, m
-                            ]
-
-    def scheduling(self):
-        """
-        Function to generate the accurate scheduling times for each job and operation. The scheduling constraints
-        concerning the positions on machines and the constraints of operations precedence are called one after the
-        other, until convergence is reached. If the scheduling setup is infeasible, the procedure stops after reaching
-        a certain number of iterations and the infeasibility flag is set to false.
-
-        Returns:
-            True if scheduling is feasible
-            False if scheduling is infeasible
-        """
-        # TODO: check number of maximum iterations
-        # TODO: Maybe breaking condition if both scheduling processes have alternating behavior
-        max_iter = np.max(self.i) * self.j
-        for n in range(max_iter):
-            if n == max_iter - 1:
-                return False
-            rm = self._schedule_rm()
-            ij = self._schedule_ij()
-            if rm is True & ij is True:
-                # TODO: Try another termination criteria, e.g. very bad makespan
-                return True
-        return False
-
-    def _schedule_rm(self):
-        j1, j2, i1, i2 = None, None, None, None
-        change = 0
-        for m in range(self.m):
-            max_pos = []
+        for m in range(machine, self.m):
+            index_ji = []
+            sort = []
             for j in range(self.j):
-                index = np.where(self.y_jirm[j][:, :, m] == 1)[1]
-                if len(index) > 0:
-                    max_pos.append(np.max((np.where(self.y_jirm[j][:, :, m] == 1))[1]))
-                else:
-                    max_pos.append(0)
+                index = np.nonzero(self.y_jirm[j][:, :, m])
+                if len(index[0]) > 0:
+                    index_ji.append([j, int(index[0]), int(index[1])])
+                    sort.append(int(index[1]))
+            index_ji = [y for x, y in sorted(zip(sort, index_ji))]
 
-            for r in range(max(max_pos)):
-                for j in range(self.j):
-                    index1 = np.where(self.y_jirm[j][:, r, m] == 1)[0]
-                    index2 = np.where(self.y_jirm[j][:, r + 1, m] == 1)[0]
-                    if len(index1) > 0:
-                        j1 = j
-                        i1 = index1
-                    if len(index2) > 0:
-                        j2 = j
-                        i2 = index2
-                if j1 is None or j2 is None:
-                    raise ValueError
-                if self.starting_time_ij[j2][i2] < self.completion_time_ij[j1][i1]:
-                    difference = (
-                        self.completion_time_ij[j1][i1] - self.starting_time_ij[j2][i2]
-                    )
-                    self.starting_time_ij[j2][i2] += difference
-                    self.completion_time_ij[j2][i2] += difference
-                    change += 1
-
-        if change == 0:
-            return True
-        else:
-            return False
-
-    def _schedule_ij(self):
-        change = 0
-        for j in range(self.j):
-            for i in range(self.i[j] - 1):
-                if self.starting_time_ij[j][i + 1] < self.completion_time_ij[j][i]:
-                    difference = (
-                        self.completion_time_ij[j][i] - self.starting_time_ij[j][i + 1]
-                    )
-                    self.starting_time_ij[j][i + 1] += difference
-                    self.completion_time_ij[j][i + 1] += difference
-                    change += 1
-        if change == 0:
-            return True
-        else:
-            return False
+            for r in range(len(index_ji)):
+                job = index_ji[r][0]
+                operation = index_ji[r][1]
+                self.time_calculation(m, job, operation)
+                # check if maintenance has to be scheduled according to y_mwr
+                for maintenance_w, t in enumerate(self.y_mwr[m]):
+                    if t == r:
+                        self.schedule_maintenance(m, operation, job, r, maintenance_w)
 
     def determine_termination_criterion(self):
         # TODO: Additional termination criterion, if no further convergence of the objective function
@@ -299,8 +204,8 @@ class JobShop:
         self._apply_move_type()
 
     def _selecting_move_type(self):
-        if self.iteration_number % 2 == 0:
-            self._move_operation_insert_on_another_machine()
+        if self.iteration_number % 1 == 0:
+            self._move_maintenance_swap()
         elif self.iteration_number % 3 == 0:
             self._move_operation_insert_operation_on_one_machine()
         else:
@@ -496,8 +401,40 @@ class JobShop:
         # TODO: Selection of the best solution, y_jirm = best solution
         # TODO: Add move type to the tabu list
 
-    def _move_maintenance_i(self):
-        pass
+    def _move_maintenance_swap(self):
+        new_solution, new_y_mwr = None, None
+        initial_y_mwr = copy.deepcopy(self.y_mwr)
+        # select a feasible machine
+        machine_select = []
+        for m in range(len(self.y_mwr)):
+            if self.y_mwr[m]:
+                machine_select.append(m)
+        machine = np.random.choice(machine_select)
+        max_pos = self._determine_max_position(machine) - 2
+        if max_pos <= 1:
+            return None
+        maintenance_w = np.random.randint(0, len(self.y_mwr[machine]))
+        current_position = self.y_mwr[machine][maintenance_w]
+
+        for r in range(max_pos):
+            if r != current_position:
+                self.y_mwr[machine][maintenance_w] = r
+
+                self.calculate_fitness_function(machine)
+                makespan = []
+                for j in range(self.j):
+                    makespan.append(np.max(self.completion_time_ij[j]))
+                self.makespan = max(makespan)
+                print('Makespan: {}'.format(self.makespan))
+
+                if self.makespan < self.make_span[-1]:
+                    self.make_span.append(self.makespan)
+                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    new_y_mwr = copy.deepcopy(self.optimized_solution[1])
+
+                self.y_mwr = copy.deepcopy(initial_y_mwr)
+        if new_y_mwr is not None:
+            self.y_mwr = copy.deepcopy(new_y_mwr)
 
     def _move_maintenance_ii(self):
         pass
@@ -507,58 +444,6 @@ class JobShop:
 
     def _move_buffer_ii(self):
         pass
-
-    def _check_feasibility(self):
-        """
-        Feasibility check of the generated decision variable y_jirm with respect to two constraints:
-        Feasibility check 1: Operation assignment is only possible if an operation on a machine is feasible.
-        Feasibility check 2: Every operation hast to be assigned to a machine, where the operation is feasible.
-
-        Args:
-            self.y_jirm (array): Decision variable on which feasibility check is performed
-            self.processing_time (array): Transformed to boolean to receive machine feasibility
-
-        Returns:
-            True: If both checks passed
-            False: If at least one check fails
-        """
-
-        # First feasibility check
-        # Returns True if an operation of a job is only assigned to a machine where this operation is possible.
-        # Word sheet equation 3: \sum_r^J y_jirm <= f_jim
-        machine_feasibility = np.array(self.processing_time[:], dtype=bool)
-        y_ijm = np.sum(self.y_jirm[0], axis=2)
-        it = np.nditer(y_ijm, flags=["multi_index"])
-        for x in it:
-            x = int(x)
-            y = int(machine_feasibility[it.multi_index])
-            if x > y:
-                print("First check failed")
-                return False
-        # Second feasibility check
-        # Returns True if each operation of a job is assigned to exactly one machine
-        # Word sheet equation 4: \sum_r^J\sum_m^M (y_jirm * f_jim) = 1
-        tensor_contraction = np.zeros(self.shape)
-        it = np.nditer(self.y_jirm, flags=["multi_index"])
-        for x in it:
-            x = int(x)
-            y = int(
-                machine_feasibility[
-                    it.multi_index[0], it.multi_index[1], it.multi_index[3]
-                ]
-            )
-            tensor_contraction[it.multi_index] = x * y
-
-        tensor_contraction = np.sum(tensor_contraction, axis=2)
-        tensor_contraction = np.sum(tensor_contraction, axis=2)
-
-        if tensor_contraction.all:
-            pass
-        else:
-            print("Second check failed")
-            return False
-
-        return True
 
     def _determine_max_position(self, machine):
         max_pos = []
@@ -615,7 +500,7 @@ class JobShop:
         self.colors = self._generate_colors()
 
         if self.maintenance_duration is not None:
-            self.z_mu = np.zeros((self.m, 90000))
+            self.z_mu = np.zeros((self.m, 9000))
         return initial_length
 
     def initialize_times(self):
@@ -630,6 +515,7 @@ class JobShop:
         self.completion_time_mw = [
             [] for _ in np.arange(len(self.maintenance_duration))
         ]
+        self.y_mwr = [[] for _ in np.arange(len(self.maintenance_duration))]
 
         for j in range(self.j):
             self.starting_time_ij.append(np.zeros((self.i[j])))
@@ -732,11 +618,11 @@ class JobShop:
         for job_index in priority_list[1:, 0]:  # loop over priority list
             job_index = int(job_index)
             self.schedule_operation(job_index)
-        #for m in range(self.m):
-        #    if any(self.maintenance_duration[m] != 0):
-        #        raise ValueError(
-        #            "Maintenance scheduling is not feasible! \n Update input data for maintenance!"
-        #        )
+
+        makespan = []
+        for j in range(self.j):
+            makespan.append(np.max(self.completion_time_ij[j]))
+        self.makespan = max(makespan)
 
     def schedule_operation(self, job_index):
         for i in range(self.i[job_index]):  # loop over operations
@@ -754,17 +640,17 @@ class JobShop:
                     )  # get the minimum of machine position and choose this machine
                 ]
             self.time_calculation(machine_choice, job_index, i)
+            self.schedule_maintenance(machine_choice, i, job_index, self.machine_position[machine_choice])
             self.y_jirm[job_index][
                 i, self.machine_position[machine_choice], machine_choice
             ] = 1
             self.machine_position[machine_choice] += 1
 
     def time_calculation(self, machine, job, operation):
-        position = self.machine_position[machine]
         self.starting_time_ij[job][operation] = copy.deepcopy(
             self.machine_time[machine]
         )
-        self.completion_time_ij[job][operation] = (
+        self.completion_time_ij[job][operation] = copy.deepcopy(
             self.machine_time[machine] + self.processing_time[job][operation, machine]
         )
         if operation > 0:
@@ -773,63 +659,65 @@ class JobShop:
                 - self.starting_time_ij[job][operation]
             )
             if diff > 0:
-                self.starting_time_ij[job][operation] += diff
-                self.completion_time_ij[job][operation] += diff
+                self.starting_time_ij[job][operation] = copy.deepcopy(self.starting_time_ij[job][operation] + diff)
+                self.completion_time_ij[job][operation] = copy.deepcopy(self.completion_time_ij[job][operation] + diff)
 
         self.machine_time[machine] = copy.deepcopy(
             self.completion_time_ij[job][operation]
         )
-        self.schedule_maintenance(machine, operation, job)
 
-    def schedule_maintenance(self, machine, operation, job):
+    def schedule_maintenance(self, machine, operation, job, position, position_w=None):
         # check if maintenance is necessary for this machine
         if self.maintenance_duration[machine] is not None:
             for maintenance_w in range(len(self.maintenance_duration[machine][:])):
-                if self.maintenance_duration[machine][maintenance_w] != 0:
-                    start = copy.deepcopy(self.machine_time[machine][0])
-                    # TODO: Check the earliest starting time on which a maintenance activity can be scheduled without
-                    #  violating the maximum simultaneous maintenance constraint
-                    period = 10
-                    periods = 0
-                    max_simultaneous = 1
-                    required_periods = self.maintenance_duration[machine][maintenance_w]/period
-                    earliest_start = start
-                    #"""
-                    for p in range(int(start/period), 90000):
-                        # count number of maintenance in this period p:
-                        simultaneous_maintenance = np.sum(self.z_mu, axis=0)[p]  # in period p
-                        if simultaneous_maintenance >= max_simultaneous:
-                            earliest_start = (p + 1) * period
-                            periods = 0
+                if position_w is None or maintenance_w == position_w:
+                    if self.maintenance_duration[machine][maintenance_w] != 0:
+                        if position_w is None:
+                            self.y_mwr[machine].append(position)
+
+                        start = copy.deepcopy(self.machine_time[machine][0])
+                        period = 10
+                        periods = 0
+                        max_simultaneous = 3
+                        required_periods = self.maintenance_duration[machine][maintenance_w]/period
+                        earliest_start = start
+                        sum_z_mu = np.sum(self.z_mu, axis=0)
+                        for p in range(int(start/period), 9000):
+                            # count number of maintenance in this period p:
+                            simultaneous_maintenance = sum_z_mu[p]  # in period p
+                            if simultaneous_maintenance >= max_simultaneous:
+                                earliest_start = (p + 1) * period
+                                periods = 0
+                            else:
+                                periods += 1
+                            if (
+                                periods >= required_periods
+                            ):
+                                break
+                        if position_w is None:
+                            self.starting_time_mw[machine].append(earliest_start)
+                            self.completion_time_mw[machine].append(
+                                earliest_start + self.maintenance_duration[machine][maintenance_w]
+                            )
                         else:
-                            periods += 1
-                        if (
-                            periods >= required_periods
-                        ):
-                            break
-                    #"""
-                    self.starting_time_mw[machine].append(earliest_start)
-                    self.completion_time_mw[machine].append(
-                        earliest_start + self.maintenance_duration[machine][maintenance_w]
-                    )
-                    machine_time = copy.deepcopy(self.maintenance_duration[machine][maintenance_w])
-                    self.machine_time[machine] = earliest_start + machine_time
-                    self.maintenance_duration[machine][maintenance_w] = 0
-                    # generate z_mu:
-                    start_index = int(self.starting_time_mw[machine][maintenance_w] / period)
-                    end_index = int(self.completion_time_mw[machine][maintenance_w] / period)
-                    self.z_mu[machine, start_index:end_index] += 1
-                    if any(self.z_mu[machine, :] > 1):
-                        raise ValueError('Maintenance overlap!!! Abort...')
-                    break
+                            self.starting_time_mw[machine][maintenance_w] = copy.deepcopy(earliest_start)
+                            self.completion_time_mw[machine][maintenance_w] = copy.deepcopy(
+                                earliest_start + self.maintenance_duration[machine][maintenance_w]
+                            )
+                        machine_time = copy.deepcopy(self.maintenance_duration[machine][maintenance_w])
+                        self.machine_time[machine] = earliest_start + machine_time
+                        self.maintenance_duration[machine][maintenance_w] = 0
+                        # generate z_mu:
+                        start_index = int(self.starting_time_mw[machine][maintenance_w] / period)
+                        end_index = int(self.completion_time_mw[machine][maintenance_w] / period)
+                        self.z_mu[machine, start_index:end_index] += 1
+                        if any(self.z_mu[machine, :] > 1):
+                            raise ValueError('Maintenance overlap!!! Abort...')
+                        break
         else:
             self.machine_time[machine] = copy.deepcopy(
                 self.completion_time_ij[job][operation]
             )
-
-    def count_simultaneous_maintenance(self, period):
-        for m in range(self.m):
-            pass
 
     def plot_gantt_chart(self, group=False, title="Gantt_Chart"):
         """
@@ -947,6 +835,6 @@ if __name__ == "__main__":
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         maintenance_duration=maintenance,
-        max_iter=300,
+        max_iter=100,
     )
     job_shop_object.main_run()
