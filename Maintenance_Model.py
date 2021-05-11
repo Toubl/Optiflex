@@ -36,14 +36,14 @@ class JobShop:
     big_b = 9999999
 
     def __init__(
-        self,
-        maintenance_max=None,
-        processing_time=None,
-        maintenance_duration=None,
-        n_m=None,
-        buffer_capacity=None,
-        max_iter=None,
-        max_simultaneous=None,
+            self,
+            maintenance_max=None,
+            processing_time=None,
+            maintenance_duration=None,
+            n_m=None,
+            buffer_capacity=None,
+            max_iter=None,
+            max_simultaneous=None,
     ):
         self.maintenance_max = maintenance_max
         self.processing_time = processing_time
@@ -76,6 +76,13 @@ class JobShop:
         self.z_mu = None
         self.y_mwr = None
         self.initial_maintenance_duration = copy.deepcopy(maintenance_duration)
+        self.multiple_machines = None
+        self.move_type_selection = {
+            "maintenance_swap": 0,
+            "insert_one": 0,
+            "insert_another": 0,
+            "operation_swap": 0,
+        }
 
         self.feasibility = None
         self.start_time = None
@@ -107,14 +114,9 @@ class JobShop:
         )
 
         self.calculate_fitness_function(0)
-        makespan = []
-        for j in range(self.j):
-            makespan.append(np.max(self.completion_time_ij[j]))
-        self.makespan = max(makespan)
+        self._calculate_makespan()
         self.make_span.append(self.makespan)
-        print(
-            "Initial makespan with advanced order: {}".format(self.makespan)
-        )
+        print("Initial makespan with advanced order: {}".format(self.makespan))
         self.plot_gantt_chart(
             group=True,
             title="Initial Scheduling with advanced order: {}".format(self.makespan),
@@ -122,10 +124,7 @@ class JobShop:
 
         self._random_maintenance_for_initialization()
         self.calculate_fitness_function(0)
-        makespan = []
-        for j in range(self.j):
-            makespan.append(np.max(self.completion_time_ij[j]))
-        self.makespan = max(makespan)
+        self._calculate_makespan()
         self.make_span.append(self.makespan)
         print(
             "Initial makespan with random maintenance order: {}".format(self.makespan)
@@ -135,19 +134,28 @@ class JobShop:
             title="Initial Scheduling with random order: {}".format(self.makespan),
         )
 
+        self._multiple_machine_jobs()
+        reset_counter = 0
         with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
-                self.generate_new_solution()
+                improvement = self.generate_new_solution()
+                if improvement is False:
+                    reset_counter += 1
+                else:
+                    reset_counter = 0
+                if reset_counter > self.max_iter * 0.1:
+                    reset_counter = 0
+                    self._random_maintenance_for_initialization()
+                    self.calculate_fitness_function(0)
+                    self._calculate_makespan()
+                    self.make_span.append(self.makespan)
                 bar()
 
         if self.optimized_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
             self.calculate_fitness_function(0)
-            makespan = []
-            for j in range(self.j):
-                makespan.append(np.max(self.completion_time_ij[j]))
-            self.makespan = max(makespan)
+            self._calculate_makespan()
             self.plot_gantt_chart(
                 group=True,
                 title="Optimized solution with makespan of {}".format(self.makespan),
@@ -219,49 +227,76 @@ class JobShop:
         return False
 
     def generate_new_solution(self):
-        self._selecting_move_type()
+        improvement = self._selecting_move_type()
         self._apply_move_type()
+        return improvement
 
     def _selecting_move_type(self):
-        if self.iteration_number % 1 == 0:
+        if (
+                self.iteration_number < self.max_iter * 0.1
+        ):  # First 10% of iterations is maintenance
             self._move_maintenance_swap()
-        elif self.iteration_number % 3 == 0:
-            self._move_operation_insert_operation_on_one_machine()
+        elif self.move_type_selection['insert_another'] < self.max_iter * 0.01:
+            improvement = self._move_operation_insert_on_another_machine()
+            self.move_type_selection['insert_another'] += 1
+            self.move_type_selection['operation_swap'] = 0
+            return improvement
+        elif self.move_type_selection['operation_swap'] < self.max_iter * 0.01:
+            improvement = self._move_operation_position_swap_on_one_machine()
+            self.move_type_selection['operation_swap'] += 1
+            self.move_type_selection['maintenance_swap'] = 0
+            return improvement
+        elif self.move_type_selection['maintenance_swap'] < self.max_iter * 0.02:
+            improvement = self._move_maintenance_swap()
+            self.move_type_selection['maintenance_swap'] += 1
+            self.move_type_selection['insert_one'] = 0
+            return improvement
+        elif self.move_type_selection['insert_one'] < self.max_iter * 0.01:
+            improvement = self._move_operation_insert_operation_on_one_machine()
+            self.move_type_selection['insert_one'] += 1
+            self.move_type_selection['insert_another'] = 0
+            return improvement
         else:
-            self._move_operation_position_swap_on_one_machine()
+            warnings.warn("Undefined case in selecting movetype")
+            return False
 
     def _apply_move_type(self):
         pass
 
     def _move_operation_insert_on_another_machine(self):
         """
-        Increasing makespan is not accepted in this move type
+        Increasing makespan is not accepted in this move type.
+        Movetype preferable on machines, where makespan restricting job is assigned to.
         """
         initial_y_jirm = copy.deepcopy(self.y_jirm)
+        initial_y_mwr = copy.deepcopy(self.y_mwr)
         new_y = copy.deepcopy(self.y_jirm)
-        selection = []
         makespan = []
         decision = []
         new_solution = None
-        # Determine operations able to be processed on multiple machines
-        for j in range(self.j):
-            for i in range(self.i[j]):
-                indices = np.nonzero(self.processing_time[j][i, :])
-                if np.size(indices[0]) > 1:
-                    selection.append([j, i, indices])
-        # Randomly select i,j
-        # TODO: Find a better way here
-        try:
-            choice = np.random.randint(0, len(selection))
-        except:
+
+        if len(self.multiple_machines) <= 1:
             return None
-        j = (selection[choice])[0]
-        i = (selection[choice])[1]
+        else:
+            choice = np.random.randint(0, len(self.multiple_machines))
+
+        j = (self.multiple_machines[choice])[0]
+        i = (self.multiple_machines[choice])[1]
         # Get current machine
         current_machine = int(np.where(self.y_jirm[j][i, :, :] == 1)[1])
         current_position = int(np.where(self.y_jirm[j][i, :, :] == 1)[0])
+
+        if current_position >= self._determine_max_position(current_machine) and any(
+                t == current_position - 1 for t in self.y_mwr[current_machine]
+        ):
+            warnings.warn("Last position cannot be swapped")
+            return None
+        if current_position == 0 and any(t == 0 for t in self.y_mwr[current_machine]):
+            warnings.warn("First position cannot be swapped")
+            return None
+
         # Randomly select new machine
-        machines = ((selection[choice])[2])[0]
+        machines = ((self.multiple_machines[choice])[2])[0]
         while True:
             new_machine = machines[np.random.choice(len(machines))]
             if new_machine != current_machine:
@@ -269,20 +304,30 @@ class JobShop:
         # Try every position on new machine and select the one with smallest makespan
         r_max = self._determine_max_position(new_machine) + 1
 
+        for maintenance_w, position_w in enumerate(self.y_mwr[current_machine]):
+            if position_w >= current_position:
+                self.y_mwr[current_machine][maintenance_w] += -1
+        new_y_mwr = copy.deepcopy(self.y_mwr)
+
         for r_new in range(
-            r_max
+                r_max
         ):  # +1 because operation can also be set to the last position on new machine
             self.y_jirm = copy.deepcopy(initial_y_jirm)
+            self.y_mwr = copy.deepcopy(new_y_mwr)
+            for maintenance_w, position_w in enumerate(self.y_mwr[new_machine]):
+                if position_w >= r_new:
+                    self.y_mwr[new_machine][maintenance_w] += 1
+
             for r in range(self.r):
                 for j in range(self.j):
                     if r == r_new:
                         new_y[j][:, r, new_machine] = self.y_jirm[j][
-                            :, current_position, current_machine
-                        ]
+                                                      :, current_position, current_machine
+                                                      ]
                     elif r > r_new:
                         new_y[j][:, r, new_machine] = self.y_jirm[j][
-                            :, r - 1, new_machine
-                        ]
+                                                      :, r - 1, new_machine
+                                                      ]
                     else:
                         new_y[j][:, r, new_machine] = self.y_jirm[j][:, r, new_machine]
 
@@ -292,38 +337,39 @@ class JobShop:
                         new_y[j][:, r, current_machine] = 0
                     elif r >= current_position:
                         new_y[j][:, r, current_machine] = self.y_jirm[j][
-                            :, r + 1, current_machine
-                        ]
+                                                          :, r + 1, current_machine
+                                                          ]
                     else:
                         new_y[j][:, r, current_machine] = self.y_jirm[j][
-                            :, r, current_machine
-                        ]
+                                                          :, r, current_machine
+                                                          ]
             # Generate new y_jirm
             self.y_jirm = copy.deepcopy(new_y)
-            decision.append(self.calculate_fitness_function())
-            # if self._check_feasibility() is not True:
-            #    raise ValueError('Generated solution is not feasible!!!')
-            makespan.append([decision[-1], new_y])
+            self.calculate_fitness_function(0)
+            self._calculate_makespan()
+            makespan.append([self.makespan, new_y, self.y_mwr])
             # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
             print("Makespan of new machine assignment: {}".format(makespan[-1][0]))
 
             # if makespan smaller than previous best, update y
             if makespan[-1][0] <= self.make_span[-1]:
                 self.make_span.append(makespan[-1][0])
-                self.optimized_solution = copy.deepcopy(new_y)
+                self.optimized_solution = copy.deepcopy([new_y, self.y_mwr])
                 new_solution = copy.deepcopy(new_y)
-                minimum = int(np.argmin(decision))
-                self.y_jirm = copy.deepcopy((makespan[minimum])[1])
-        # Calculate new makespan
+
         if new_solution is not None:
-            self.y_jirm = copy.deepcopy(new_solution)
+            self.y_jirm = copy.deepcopy(self.optimized_solution[0])
+            self.y_mwr = copy.deepcopy(self.optimized_solution[1])
+            return True
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
+            self.y_mwr = copy.deepcopy(initial_y_mwr)
+            return False
 
     def _move_operation_position_swap_on_one_machine(self):
         """
         Perform a swapping move type on a randomly selected machine. On this machine, one operation i.e. one position
-        is selected randomly and it will change position with all other operations on this machine ona after the other.
+        is selected randomly and it will change position with all other operations on this machine one after the other.
         This generates the neighborhood set. If a new neighbor is better than the currently best, the decision variable
         will be updated.
         """
@@ -337,9 +383,15 @@ class JobShop:
         if max_pos <= 1:
             return None
         r_swap = np.random.randint(0, max_pos)
+        r_min = r_swap - 3
+        r_max = r_swap + 4
+        if r_min < 0:
+            r_min = 0
+        if r_max > max_pos:
+            r_max = max_pos
         # swap this position with all others, this gives the neighborhood
-        for r in range(max_pos):
-            if r != r_swap:  # TODO: Additionally, check if move is in tabu list
+        for r in range(r_min, r_max):
+            if r != r_swap:
                 # reset self.y_jirm
                 self.y_jirm = copy.deepcopy(initial_y_jirm)
                 for j in range(self.j):
@@ -348,30 +400,28 @@ class JobShop:
                     self.y_jirm[j][:, r_swap, m] = self.y_jirm[j][:, r, m]
                     self.y_jirm[j][:, r, m] = swap
 
-                makespan = self.calculate_fitness_function()
+                self.calculate_fitness_function(0)
+                self._calculate_makespan()
                 # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
-                print("Makespan of new neighbor: {}".format(makespan))
+                print("Makespan of new neighbor: {}".format(self.makespan))
 
                 # if makespan smaller than previous best, update y
-                if makespan <= self.make_span[-1]:
-                    self.make_span.append(makespan)
+                if self.makespan <= self.make_span[-1]:
+                    self.make_span.append(self.makespan)
                     new_y = copy.deepcopy(self.y_jirm)
-                    self.optimized_solution = copy.deepcopy(new_y)
-                    # self.plot_gantt_chart(
-                    #    group=True,
-                    #    title="Swap {} and {} on machine {}, Feasibility: {}".format(r_swap, r, m, self.feasibility),
-                    # )
+                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
         # Set y_jirm to the generated optimal solution if available
         if new_y is not None:
-            self.y_jirm = copy.deepcopy(new_y)
+            self.y_jirm = copy.deepcopy(self.optimized_solution[0])
+            return True
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
-        # TODO: Selection of the best solution, y_jirm = best solution
-        # TODO: Add move type to the tabu list
+            return False
 
     def _move_operation_insert_operation_on_one_machine(self):
         new_solution, new_y = None, None
         initial_y_jirm = copy.deepcopy(self.y_jirm)
+        initial_y_mwr = copy.deepcopy(self.y_mwr)
         # Change y_jirm and calculate all other helper variables again and determine makespan
         # select the machine to perform this operation
         m = np.random.randint(0, self.m)
@@ -379,11 +429,32 @@ class JobShop:
         if max_pos <= 1:
             return None
         r_insert = np.random.randint(0, max_pos)
+        r_min = r_insert - 3
+        r_max = r_insert + 4
+        if r_min < 0:
+            r_min = 0
+        if r_max > max_pos:
+            r_max = max_pos
         # swap this position with all others, this gives the neighborhood
-        for r in range(max_pos):
-            if r != r_insert:  # TODO: Additionally, check if move is in tabu list
+        for r in range(r_min, r_max):
+            if r != r_insert:
                 # reset self.y_jirm
                 self.y_jirm = copy.deepcopy(initial_y_jirm)
+                self.y_mwr = copy.deepcopy(initial_y_mwr)
+
+                for maintenance_w, position_w in enumerate(self.y_mwr[m]):
+                    if r <= position_w and r_insert <= position_w:
+                        pass
+                    elif r > position_w and r_insert > position_w:
+                        pass
+                    elif r_insert <= position_w:
+                        self.y_mwr[m][maintenance_w] += -1
+                    elif r_insert > position_w:
+                        self.y_mwr[m][maintenance_w] += 1
+                    else:
+                        warnings.warn("Insert operation undefined state!")
+                        return None
+
                 new_y = copy.deepcopy(initial_y_jirm)
                 for j in range(self.j):
                     for rr in range(self.r):
@@ -400,25 +471,24 @@ class JobShop:
                 else:
                     self.y_jirm = copy.deepcopy(new_y)
 
-                makespan = self.calculate_fitness_function()
+                self.calculate_fitness_function(0)
                 # Some inserts are not feasible due to deadlock effects. Thus, invalid solutions occur
-                print("Makespan of new neighbor: {}".format(makespan))
+                print("Makespan of new neighbor: {}".format(self.makespan))
 
                 # if makespan smaller than previous best, update y
-                if makespan <= self.make_span[-1]:
-                    self.make_span.append(makespan)
+                if self.makespan <= self.make_span[-1]:
+                    self.make_span.append(self.makespan)
                     new_solution = copy.deepcopy(self.y_jirm)
-                    self.optimized_solution = copy.deepcopy(new_solution)
-                    # self.plot_gantt_chart(
-                    #    group=True,
-                    #    title="Insert {} to position {} on machine {}, Feasibility: {}".format(r_insert, r, m, self.feasibility),
-                    # )
+                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
+
         if new_solution is not None:
-            self.y_jirm = copy.deepcopy(new_solution)
+            self.y_jirm = copy.deepcopy(self.optimized_solution[0])
+            self.y_mwr = copy.deepcopy(self.optimized_solution[1])
+            return True
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
-        # TODO: Selection of the best solution, y_jirm = best solution
-        # TODO: Add move type to the tabu list
+            self.y_mwr = copy.deepcopy(initial_y_mwr)
+            return False
 
     def _move_maintenance_swap(self):
         new_solution, new_y_mwr = None, None
@@ -440,10 +510,7 @@ class JobShop:
                 self.y_mwr[machine][maintenance_w] = r
 
                 self.calculate_fitness_function(0)
-                makespan = []
-                for j in range(self.j):
-                    makespan.append(np.max(self.completion_time_ij[j]))
-                self.makespan = max(makespan)
+                self._calculate_makespan()
                 print("Makespan: {}".format(self.makespan))
 
                 if self.makespan < self.make_span[-1]:
@@ -454,6 +521,9 @@ class JobShop:
                 self.y_mwr = copy.deepcopy(initial_y_mwr)
         if new_y_mwr is not None:
             self.y_mwr = copy.deepcopy(new_y_mwr)
+            return True
+        else:
+            return False
 
     def _move_maintenance_ii(self):
         pass
@@ -493,15 +563,15 @@ class JobShop:
         self.j = np.shape(self.processing_time)[0]
         self.m = np.shape(self.processing_time)[2]
         self.r = (
-            int(
-                np.max(
-                    np.sum(
-                        np.sum(np.array(self.processing_time, dtype=bool), axis=0),
-                        axis=0,
+                int(
+                    np.max(
+                        np.sum(
+                            np.sum(np.array(self.processing_time, dtype=bool), axis=0),
+                            axis=0,
+                        )
                     )
                 )
-            )
-            * 3
+                * 3
         )
 
         self.i = []
@@ -587,10 +657,6 @@ class JobShop:
         total_time = []
         for j in range(self.j):
             total_time.append(-np.sum(p_ji[j]))
-
-        # total_time = np.sum(
-        #    p_ji, axis=0
-        # )  # calculate total completion time for each job (sum over i)
         job_index = np.arange(self.j)  # job indices from 0 to self.j
         sort = np.argsort(
             total_time
@@ -618,8 +684,8 @@ class JobShop:
                     else:
                         position = np.random.randint(0, max_position - 1)
                     a = np.arange(int((max_position - 2) * (machine / self.m)) + 1)
+                    print(machine)
                     self.y_mwr[machine][maintenance_w] = np.random.choice(a)
-
 
     def _initial_scheduling(self, priority_list):
         """
@@ -656,10 +722,7 @@ class JobShop:
             job_index = int(job_index)
             self.schedule_operation(job_index)
 
-        makespan = []
-        for j in range(self.j):
-            makespan.append(np.max(self.completion_time_ij[j]))
-        self.makespan = max(makespan)
+        self._calculate_makespan()
 
     def schedule_operation(self, job_index):
         for i in range(self.i[job_index]):  # loop over operations
@@ -694,8 +757,8 @@ class JobShop:
         )
         if operation > 0:
             diff = (
-                self.completion_time_ij[job][operation - 1]
-                - self.starting_time_ij[job][operation]
+                    self.completion_time_ij[job][operation - 1]
+                    - self.starting_time_ij[job][operation]
             )
             if diff > 0:
                 self.starting_time_ij[job][operation] = copy.deepcopy(
@@ -722,7 +785,7 @@ class JobShop:
                         period = 10
                         periods = 0
                         required_periods = (
-                            self.maintenance_duration[machine][maintenance_w] / period
+                                self.maintenance_duration[machine][maintenance_w] / period
                         )
                         earliest_start = start
                         sum_z_mu = np.sum(self.z_mu, axis=0)
@@ -845,41 +908,30 @@ class JobShop:
             colors.append("#%02X%02X%02X" % (r, g, b))
         return colors
 
+    def _multiple_machine_jobs(self):
+        """
+        Get all the jobs which are able to be processed on several machines
+        """
+        selection = []
+        # Determine operations able to be processed on multiple machines
+        for j in range(self.j):
+            for i in range(self.i[j]):
+                indices = np.nonzero(self.processing_time[j][i, :])
+                if np.size(indices[0]) > 1:
+                    selection.append([j, i, indices])
+        self.multiple_machines = selection
 
-def extract_csv(file_name, dimension=None):
-
-    if dimension in [None, 0, 1, 2]:
-        array = pd.read_csv(file_name, sep=";", index_col=0, header=0)
-        return array.values
-    elif dimension == 3:
-        read_in = pd.read_csv(file_name, sep=";", index_col=None, header=None)
-        machine_list = read_in.index[read_in[0].str.contains("m")].tolist()
-        array = read_in.values[
-            1 : int(read_in.shape[0] / len(machine_list)), 1 : read_in.shape[1]
-        ]
-        for val in machine_list:
-            array = np.dstack(
-                (
-                    np.atleast_3d(array),
-                    read_in.values[
-                        val + 1 : int(read_in.shape[0] / len(machine_list) + val),
-                        1 : read_in.shape[1],
-                    ],
-                )
-            )
-        return array[:, :, 1::].astype(np.int64)
-    else:
-        raise ValueError("Select a feasible dimension parameter")
+    def _calculate_makespan(self):
+        makespan = []
+        for j in range(self.j):
+            makespan.append(np.max(self.completion_time_ij[j]))
+        self.makespan = max(makespan)
 
 
 if __name__ == "__main__":
-
-    # processing_time_path = "/Users/q517174/PycharmProjects/Optiflex/processing_time.csv"
-    # processing_time_input = extract_csv(processing_time_path, 3)
-
     processing_time_path = "parameter/Takzeit_overview.xlsx"
     variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [10, 10, 10, 10]
+    amount_of_variants = [5, 5, 5, 5]
     processing_time_input, maintenance = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants, maintenance=True
     )
@@ -888,7 +940,8 @@ if __name__ == "__main__":
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         maintenance_duration=maintenance,
-        max_iter=150,
+        max_iter=200,
         max_simultaneous=3,
     )
+    # Run the optimization
     job_shop_object.main_run()
