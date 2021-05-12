@@ -44,6 +44,12 @@ class JobShop:
             buffer_capacity=None,
             max_iter=None,
             max_simultaneous=None,
+            convergence_limit=50,
+            insert_another=2,
+            maintenance_swap=4,
+            insert_one=2,
+            operation_swap=2,
+            period=10,
     ):
         self.maintenance_max = maintenance_max
         self.processing_time = processing_time
@@ -52,6 +58,12 @@ class JobShop:
         self.buffer_capacity = buffer_capacity
         self.max_iter = max_iter
         self.Q = max_simultaneous
+        self.convergence_limit = convergence_limit
+        self.insert_another = insert_another
+        self.insert_one = insert_one
+        self.maintenance_swap = maintenance_swap
+        self.operation_swap = operation_swap
+        self.period = period
 
         self.starting_time_ij = None
         self.completion_time_ij = None
@@ -83,6 +95,8 @@ class JobShop:
             "insert_another": 0,
             "operation_swap": 0,
         }
+        self.improvement = None
+        self.final_best = None
 
         self.feasibility = None
         self.start_time = None
@@ -107,51 +121,89 @@ class JobShop:
         print(header)
 
         self.generate_initial_solution()
-        print(self.makespan)
+        print("Makespan of initial solution: {}".format(self.makespan))
         self.plot_gantt_chart(
             group=True,
             title="Initial Scheduling with a makespan of {}".format(self.makespan),
         )
+        initial = copy.deepcopy([self.y_jirm, self.y_mwr])
 
-        self.calculate_fitness_function(0)
-        self._calculate_makespan()
         self.make_span.append(self.makespan)
-        print("Initial makespan with advanced order: {}".format(self.makespan))
-        self.plot_gantt_chart(
-            group=True,
-            title="Initial Scheduling with advanced order: {}".format(self.makespan),
-        )
 
-        self._random_maintenance_for_initialization()
+        self._random_maintenance_for_initialization_scaled()
         self.calculate_fitness_function(0)
         self._calculate_makespan()
         self.make_span.append(self.makespan)
         print(
-            "Initial makespan with random maintenance order: {}".format(self.makespan)
+            "Initial makespan with scaled random maintenance order: {}".format(
+                self.makespan
+            )
         )
         self.plot_gantt_chart(
             group=True,
-            title="Initial Scheduling with random order: {}".format(self.makespan),
+            title="Initial Scheduling with scaled random order: {}".format(
+                self.makespan
+            ),
         )
+
+        self._random_maintenance_for_initialization_unscaled()
+        self.calculate_fitness_function(0)
+        self._calculate_makespan()
+        self.make_span.append(self.makespan)
+        print(
+            "Initial makespan with unscaled random maintenance order: {}".format(
+                self.makespan
+            )
+        )
+        self.plot_gantt_chart(
+            group=True,
+            title="Initial Scheduling with unscaled random order: {}".format(
+                self.makespan
+            ),
+        )
+
+        self.y_jirm = copy.deepcopy(initial[0])
+        self.y_mwr = copy.deepcopy(initial[1])
 
         self._multiple_machine_jobs()
         reset_counter = 0
         with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
-                improvement = self.generate_new_solution()
-                if improvement is False:
+                self.generate_new_solution()
+                if self.improvement is False:
                     reset_counter += 1
                 else:
                     reset_counter = 0
-                if reset_counter > self.max_iter * 0.1:
+                if reset_counter > self.convergence_limit:
                     reset_counter = 0
-                    self._random_maintenance_for_initialization()
+                    if (
+                            self.final_best is None
+                            or self.optimized_solution[2] < self.final_best[2]
+                    ):
+                        self.final_best = copy.deepcopy(self.optimized_solution)
+                    self._random_maintenance_for_initialization_scaled()
+                    print(
+                        "----------------------------------------------------------------\t\t\t\t\n "
+                        "No convergence --> Try diversification!\n"
+                        " ---------------------------------------------------------------"
+                    )
                     self.calculate_fitness_function(0)
                     self._calculate_makespan()
                     self.make_span.append(self.makespan)
                 bar()
 
-        if self.optimized_solution is not None:
+        if self.final_best is not None:
+            self.y_jirm = copy.deepcopy(self.final_best[0])
+            self.y_mwr = copy.deepcopy(self.final_best[1])
+            self.calculate_fitness_function(0)
+            self._calculate_makespan()
+            if self.makespan != self.final_best[2]:
+                warnings.warn("Something is wrong in calculating optimal solution!")
+            self.plot_gantt_chart(
+                group=True,
+                title="Optimized solution with makespan of {}".format(self.makespan),
+            )
+        elif self.optimized_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
             self.calculate_fitness_function(0)
@@ -227,35 +279,30 @@ class JobShop:
         return False
 
     def generate_new_solution(self):
-        improvement = self._selecting_move_type()
+        self._selecting_move_type()
         self._apply_move_type()
-        return improvement
 
     def _selecting_move_type(self):
         if (
                 self.iteration_number < self.max_iter * 0.1
         ):  # First 10% of iterations is maintenance
             self._move_maintenance_swap()
-        elif self.move_type_selection['insert_another'] < self.max_iter * 0.01:
-            improvement = self._move_operation_insert_on_another_machine()
-            self.move_type_selection['insert_another'] += 1
-            self.move_type_selection['operation_swap'] = 0
-            return improvement
-        elif self.move_type_selection['operation_swap'] < self.max_iter * 0.01:
-            improvement = self._move_operation_position_swap_on_one_machine()
-            self.move_type_selection['operation_swap'] += 1
-            self.move_type_selection['maintenance_swap'] = 0
-            return improvement
-        elif self.move_type_selection['maintenance_swap'] < self.max_iter * 0.02:
-            improvement = self._move_maintenance_swap()
-            self.move_type_selection['maintenance_swap'] += 1
-            self.move_type_selection['insert_one'] = 0
-            return improvement
-        elif self.move_type_selection['insert_one'] < self.max_iter * 0.01:
-            improvement = self._move_operation_insert_operation_on_one_machine()
-            self.move_type_selection['insert_one'] += 1
-            self.move_type_selection['insert_another'] = 0
-            return improvement
+        elif self.move_type_selection["insert_another"] < self.insert_another:
+            self._move_operation_insert_on_another_machine()
+            self.move_type_selection["insert_another"] += 1
+            self.move_type_selection["operation_swap"] = 0
+        elif self.move_type_selection["operation_swap"] < self.operation_swap:
+            self._move_operation_position_swap_on_one_machine()
+            self.move_type_selection["operation_swap"] += 1
+            self.move_type_selection["maintenance_swap"] = 0
+        elif self.move_type_selection["maintenance_swap"] < self.maintenance_swap:
+            self._move_maintenance_swap()
+            self.move_type_selection["maintenance_swap"] += 1
+            self.move_type_selection["insert_one"] = 0
+        elif self.move_type_selection["insert_one"] < self.insert_one:
+            self._move_operation_insert_operation_on_one_machine()
+            self.move_type_selection["insert_one"] += 1
+            self.move_type_selection["insert_another"] = 0
         else:
             warnings.warn("Undefined case in selecting movetype")
             return False
@@ -292,7 +339,9 @@ class JobShop:
             warnings.warn("Last position cannot be swapped")
             return None
         if current_position == 0 and any(t == 0 for t in self.y_mwr[current_machine]):
-            warnings.warn("First position cannot be swapped")
+            print(
+                "--------------------First position cannot be swapped-------------------\t\t\t\t"
+            )
             return None
 
         # Randomly select new machine
@@ -348,23 +397,28 @@ class JobShop:
             self.calculate_fitness_function(0)
             self._calculate_makespan()
             makespan.append([self.makespan, new_y, self.y_mwr])
-            # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
-            print("Makespan of new machine assignment: {}".format(makespan[-1][0]))
 
             # if makespan smaller than previous best, update y
-            if makespan[-1][0] <= self.make_span[-1]:
+            if makespan[-1][0] < self.make_span[-1]:
                 self.make_span.append(makespan[-1][0])
-                self.optimized_solution = copy.deepcopy([new_y, self.y_mwr])
+                self.optimized_solution = copy.deepcopy(
+                    [new_y, self.y_mwr, self.makespan]
+                )
                 new_solution = copy.deepcopy(new_y)
 
         if new_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
-            return True
+            self.improvement = True
+            print(
+                "Insert to another machine decreased makespan to:       {} \t\t\t\t".format(
+                    self.optimized_solution[2]
+                )
+            )
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             self.y_mwr = copy.deepcopy(initial_y_mwr)
-            return False
+            self.improvement = False
 
     def _move_operation_position_swap_on_one_machine(self):
         """
@@ -402,21 +456,26 @@ class JobShop:
 
                 self.calculate_fitness_function(0)
                 self._calculate_makespan()
-                # Some swaps are not feasible due to deadlock effects. Thus, invalid solutions occur
-                print("Makespan of new neighbor: {}".format(self.makespan))
 
                 # if makespan smaller than previous best, update y
-                if self.makespan <= self.make_span[-1]:
+                if self.makespan < self.make_span[-1]:
                     self.make_span.append(self.makespan)
                     new_y = copy.deepcopy(self.y_jirm)
-                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    self.optimized_solution = copy.deepcopy(
+                        [self.y_jirm, self.y_mwr, self.makespan]
+                    )
         # Set y_jirm to the generated optimal solution if available
         if new_y is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
-            return True
+            self.improvement = True
+            print(
+                "Position swap on one machine decreased makespan to:    {}\t\t\t\t".format(
+                    self.optimized_solution[2]
+                )
+            )
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
-            return False
+            self.improvement = False
 
     def _move_operation_insert_operation_on_one_machine(self):
         new_solution, new_y = None, None
@@ -472,23 +531,28 @@ class JobShop:
                     self.y_jirm = copy.deepcopy(new_y)
 
                 self.calculate_fitness_function(0)
-                # Some inserts are not feasible due to deadlock effects. Thus, invalid solutions occur
-                print("Makespan of new neighbor: {}".format(self.makespan))
 
                 # if makespan smaller than previous best, update y
-                if self.makespan <= self.make_span[-1]:
+                if self.makespan < self.make_span[-1]:
                     self.make_span.append(self.makespan)
                     new_solution = copy.deepcopy(self.y_jirm)
-                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    self.optimized_solution = copy.deepcopy(
+                        [self.y_jirm, self.y_mwr, self.makespan]
+                    )
 
         if new_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
-            return True
+            self.improvement = True
+            print(
+                "Insert operation on one machine decreased makespan to: {}\t\t\t\t".format(
+                    self.optimized_solution[2]
+                )
+            )
         else:
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             self.y_mwr = copy.deepcopy(initial_y_mwr)
-            return False
+            self.improvement = False
 
     def _move_maintenance_swap(self):
         new_solution, new_y_mwr = None, None
@@ -511,19 +575,25 @@ class JobShop:
 
                 self.calculate_fitness_function(0)
                 self._calculate_makespan()
-                print("Makespan: {}".format(self.makespan))
 
                 if self.makespan < self.make_span[-1]:
                     self.make_span.append(self.makespan)
-                    self.optimized_solution = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    self.optimized_solution = copy.deepcopy(
+                        [self.y_jirm, self.y_mwr, self.makespan]
+                    )
                     new_y_mwr = copy.deepcopy(self.optimized_solution[1])
 
                 self.y_mwr = copy.deepcopy(initial_y_mwr)
         if new_y_mwr is not None:
             self.y_mwr = copy.deepcopy(new_y_mwr)
-            return True
+            self.improvement = True
+            print(
+                "Maintenance swap on one machine decreased makespan to: {}\t\t\t\t".format(
+                    self.optimized_solution[2]
+                )
+            )
         else:
-            return False
+            self.improvement = False
 
     def _move_maintenance_ii(self):
         pass
@@ -600,11 +670,15 @@ class JobShop:
         self.completion_time_ij = []  # np.zeros((self.i, self.j))
         # self.starting_time_mw = copy.deepcopy(self.maintenance_duration)
         # self.completion_time_mw = copy.deepcopy(self.maintenance_duration)
-        self.starting_time_mw = [[] for _ in np.arange(len(self.maintenance_duration))]
-        self.completion_time_mw = [
-            [] for _ in np.arange(len(self.maintenance_duration))
-        ]
-        self.y_mwr = [[] for _ in np.arange(len(self.maintenance_duration))]
+        self.starting_time_mw = copy.deepcopy(
+            self.maintenance_duration
+        )  # [[] for _ in np.arange(len(self.maintenance_duration))]
+        self.completion_time_mw = copy.deepcopy(self.maintenance_duration)  # [
+        #    [] for _ in np.arange(len(self.maintenance_duration))
+        # ]
+        self.y_mwr = copy.deepcopy(
+            self.maintenance_duration
+        )  # [[] for _ in np.arange(len(self.maintenance_duration))]
 
         for j in range(self.j):
             self.starting_time_ij.append(np.zeros((self.i[j])))
@@ -665,11 +739,11 @@ class JobShop:
             (job_index[sort], np.array(total_time)[sort])
         )  # generate priority list
 
-        print("Average lower bound for makespan: {}".format(priority_list[-1][1]))
+        # print("Average lower bound for makespan: {}".format(-priority_list[-1][1]))
 
         return priority_list
 
-    def _random_maintenance_for_initialization(self):
+    def _random_maintenance_for_initialization_scaled(self):
         """
         Can be used for diversification if the optimization seems to be trapped in a local minimum.
         """
@@ -684,8 +758,35 @@ class JobShop:
                     else:
                         position = np.random.randint(0, max_position - 1)
                     a = np.arange(int((max_position - 2) * (machine / self.m)) + 1)
-                    print(machine)
                     self.y_mwr[machine][maintenance_w] = np.random.choice(a)
+
+    def _random_maintenance_for_initialization_unscaled(self):
+        """
+        Can be used for diversification if the optimization seems to be trapped in a local minimum.
+        """
+        self.maintenance_duration = copy.deepcopy(self.initial_maintenance_duration)
+        for machine in range(self.m):
+            max_position = self._determine_max_position(machine)
+            # check if maintenance is on this machine
+            if self.maintenance_duration[machine] is not None:
+                for maintenance_w in range(len(self.maintenance_duration[machine][:])):
+                    if max_position <= 1:
+                        position = 0
+                    else:
+                        position = np.random.randint(0, max_position - 1)
+                    self.y_mwr[machine][maintenance_w] = position
+
+    def _initial_maintenance(self):
+        """
+        Can be used for diversification if the optimization seems to be trapped in a local minimum.
+        """
+        self.maintenance_duration = copy.deepcopy(self.initial_maintenance_duration)
+        for machine in range(self.m):
+            max_position = self._determine_max_position(machine)
+            # check if maintenance is on this machine
+            if self.maintenance_duration[machine] is not None:
+                for maintenance_w in range(len(self.maintenance_duration[machine][:])):
+                    self.y_mwr[machine][maintenance_w] = 0
 
     def _initial_scheduling(self, priority_list):
         """
@@ -721,6 +822,8 @@ class JobShop:
         for job_index in priority_list[1:, 0]:  # loop over priority list
             job_index = int(job_index)
             self.schedule_operation(job_index)
+        self._initial_maintenance()
+        self.calculate_fitness_function(0)
 
         self._calculate_makespan()
 
@@ -740,9 +843,7 @@ class JobShop:
                     )  # get the minimum of machine position and choose this machine
                 ]
             self.time_calculation(machine_choice, job_index, i)
-            self.schedule_maintenance(
-                machine_choice, i, job_index, self.machine_position[machine_choice]
-            )
+
             self.y_jirm[job_index][
                 i, self.machine_position[machine_choice], machine_choice
             ] = 1
@@ -782,18 +883,17 @@ class JobShop:
                             self.y_mwr[machine].append(position)
 
                         start = copy.deepcopy(self.machine_time[machine][0])
-                        period = 10
                         periods = 0
                         required_periods = (
-                                self.maintenance_duration[machine][maintenance_w] / period
+                                self.maintenance_duration[machine][maintenance_w] / self.period
                         )
                         earliest_start = start
                         sum_z_mu = np.sum(self.z_mu, axis=0)
-                        for p in range(int(start / period), 9000):
+                        for p in range(int(start / self.period), 9000):
                             # count number of maintenance in this period p:
                             simultaneous_maintenance = sum_z_mu[p]  # in period p
                             if simultaneous_maintenance >= self.Q:
-                                earliest_start = (p + 1) * period
+                                earliest_start = (p + 1) * self.period
                                 periods = 0
                             else:
                                 periods += 1
@@ -822,10 +922,10 @@ class JobShop:
                         self.maintenance_duration[machine][maintenance_w] = 0
                         # generate z_mu:
                         start_index = int(
-                            self.starting_time_mw[machine][maintenance_w] / period
+                            self.starting_time_mw[machine][maintenance_w] / self.period
                         )
                         end_index = int(
-                            self.completion_time_mw[machine][maintenance_w] / period
+                            self.completion_time_mw[machine][maintenance_w] / self.period
                         )
                         self.z_mu[machine, start_index:end_index] += 1
                         if any(self.z_mu[machine, :] > 1):
@@ -858,7 +958,7 @@ class JobShop:
         df = []
 
         for m in range(self.m):
-            if self.starting_time_mw[m] is not []:
+            if self.starting_time_mw[m] is not None:
                 for w in range(len(self.starting_time_mw[m])):
                     entry = dict(
                         Task=str(m),
@@ -931,7 +1031,7 @@ class JobShop:
 if __name__ == "__main__":
     processing_time_path = "parameter/Takzeit_overview.xlsx"
     variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [5, 5, 5, 5]
+    amount_of_variants = [25, 25, 25, 25]
     processing_time_input, maintenance = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants, maintenance=True
     )
@@ -940,8 +1040,13 @@ if __name__ == "__main__":
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         maintenance_duration=maintenance,
-        max_iter=200,
+        max_iter=300,
         max_simultaneous=3,
+        convergence_limit=50,
+        maintenance_swap=5,
+        insert_another=4,
+        insert_one=2,
+        operation_swap=3,
     )
     # Run the optimization
     job_shop_object.main_run()
