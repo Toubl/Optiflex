@@ -2,8 +2,13 @@ import pandas as pd
 import numpy as np
 import time
 import warnings
+import datetime
 import math
 import matplotlib.pyplot as plt
+from multiprocessing import Process, current_process
+from pathlib import Path
+import os
+import pickle
 import copy
 import pyfiglet
 from alive_progress import alive_bar
@@ -97,6 +102,18 @@ class JobShop:
         }
         self.improvement = None
         self.final_best = None
+        self.output_dict = {
+            "Makespan": [],
+            "starting_time_ij": [],
+            "completion_time_ij": [],
+            "starting_time_mw": [],
+            "completion_time_mw": [],
+            "y_jirm": [],
+            "y_mwr": [],
+            "Movetype": [],
+            "Iteration": [],
+            'Optimum': [],
+        }
 
         self.feasibility = None
         self.start_time = None
@@ -126,44 +143,8 @@ class JobShop:
             group=True,
             title="Initial Scheduling with a makespan of {}".format(self.makespan),
         )
-        initial = copy.deepcopy([self.y_jirm, self.y_mwr])
 
         self.make_span.append(self.makespan)
-
-        self._random_maintenance_for_initialization_scaled()
-        self.calculate_fitness_function(0)
-        self._calculate_makespan()
-        self.make_span.append(self.makespan)
-        print(
-            "Initial makespan with scaled random maintenance order: {}".format(
-                self.makespan
-            )
-        )
-        self.plot_gantt_chart(
-            group=True,
-            title="Initial Scheduling with scaled random order: {}".format(
-                self.makespan
-            ),
-        )
-
-        self._random_maintenance_for_initialization_unscaled()
-        self.calculate_fitness_function(0)
-        self._calculate_makespan()
-        self.make_span.append(self.makespan)
-        print(
-            "Initial makespan with unscaled random maintenance order: {}".format(
-                self.makespan
-            )
-        )
-        self.plot_gantt_chart(
-            group=True,
-            title="Initial Scheduling with unscaled random order: {}".format(
-                self.makespan
-            ),
-        )
-
-        self.y_jirm = copy.deepcopy(initial[0])
-        self.y_mwr = copy.deepcopy(initial[1])
 
         self._multiple_machine_jobs()
         reset_counter = 0
@@ -203,6 +184,8 @@ class JobShop:
                 group=True,
                 title="Optimized solution with makespan of {}".format(self.makespan),
             )
+            self.output_dict['Optimum'].append(self.y_jirm)
+            self.output_dict['Optimum'].append(self.y_mwr)
         elif self.optimized_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
@@ -212,11 +195,15 @@ class JobShop:
                 group=True,
                 title="Optimized solution with makespan of {}".format(self.makespan),
             )
+            self.output_dict['Optimum'].append(self.y_jirm)
+            self.output_dict['Optimum'].append(self.y_mwr)
         else:
             print(
                 "\n\nNo further optimum found. Initial Solution is already optimal!\n\n"
             )
+            self.output_dict['Optimum'].append('Initial Solution is Optimum')
 
+        self.write_to_pickle()
         time_for_calculation = (time.time() - self.start_time) / 60
         print("Total time for calculation: {:.4f} minutes".format(time_for_calculation))
 
@@ -283,11 +270,11 @@ class JobShop:
         self._apply_move_type()
 
     def _selecting_move_type(self):
-        if (
-                self.iteration_number < self.max_iter * 0.1
-        ):  # First 10% of iterations is maintenance
-            self._move_maintenance_swap()
-        elif self.move_type_selection["insert_another"] < self.insert_another:
+        #if (
+        #        self.iteration_number < self.max_iter * 0.1
+        #):  # First 10% of iterations is maintenance
+        #    self._move_maintenance_swap()
+        if self.move_type_selection["insert_another"] < self.insert_another:
             self._move_operation_insert_on_another_machine()
             self.move_type_selection["insert_another"] += 1
             self.move_type_selection["operation_swap"] = 0
@@ -295,6 +282,7 @@ class JobShop:
             self._move_operation_position_swap_on_one_machine()
             self.move_type_selection["operation_swap"] += 1
             self.move_type_selection["maintenance_swap"] = 0
+            self.move_type_selection["insert_one"] = 0
         elif self.move_type_selection["maintenance_swap"] < self.maintenance_swap:
             self._move_maintenance_swap()
             self.move_type_selection["maintenance_swap"] += 1
@@ -394,7 +382,7 @@ class JobShop:
                                                           ]
             # Generate new y_jirm
             self.y_jirm = copy.deepcopy(new_y)
-            self.calculate_fitness_function(0)
+            self.calculate_fitness_function(machine=min(new_machine, current_machine))
             self._calculate_makespan()
             makespan.append([self.makespan, new_y, self.y_mwr])
 
@@ -404,6 +392,8 @@ class JobShop:
                 self.optimized_solution = copy.deepcopy(
                     [new_y, self.y_mwr, self.makespan]
                 )
+                self.y_jirm = copy.deepcopy(new_y)
+                self.update_output_information('Insert_another')
                 new_solution = copy.deepcopy(new_y)
 
         if new_solution is not None:
@@ -454,7 +444,7 @@ class JobShop:
                     self.y_jirm[j][:, r_swap, m] = self.y_jirm[j][:, r, m]
                     self.y_jirm[j][:, r, m] = swap
 
-                self.calculate_fitness_function(0)
+                self.calculate_fitness_function(machine=m)
                 self._calculate_makespan()
 
                 # if makespan smaller than previous best, update y
@@ -464,6 +454,7 @@ class JobShop:
                     self.optimized_solution = copy.deepcopy(
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
+                    self.update_output_information('operation_swap')
         # Set y_jirm to the generated optimal solution if available
         if new_y is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
@@ -530,7 +521,7 @@ class JobShop:
                 else:
                     self.y_jirm = copy.deepcopy(new_y)
 
-                self.calculate_fitness_function(0)
+                self.calculate_fitness_function(machine=m)
 
                 # if makespan smaller than previous best, update y
                 if self.makespan < self.make_span[-1]:
@@ -539,6 +530,7 @@ class JobShop:
                     self.optimized_solution = copy.deepcopy(
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
+                    self.update_output_information('Insert_one')
 
         if new_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
@@ -573,7 +565,7 @@ class JobShop:
             if r != current_position:
                 self.y_mwr[machine][maintenance_w] = r
 
-                self.calculate_fitness_function(0)
+                self.calculate_fitness_function(machine)
                 self._calculate_makespan()
 
                 if self.makespan < self.make_span[-1]:
@@ -582,8 +574,10 @@ class JobShop:
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
                     new_y_mwr = copy.deepcopy(self.optimized_solution[1])
+                    self.update_output_information('Maintenance_swap')
 
                 self.y_mwr = copy.deepcopy(initial_y_mwr)
+
         if new_y_mwr is not None:
             self.y_mwr = copy.deepcopy(new_y_mwr)
             self.improvement = True
@@ -603,6 +597,25 @@ class JobShop:
 
     def _move_buffer_ii(self):
         pass
+
+    def update_output_information(self, movetype):
+        self.output_dict['Makespan'].append(self.makespan)
+        self.output_dict['starting_time_ij'].append(self.starting_time_ij)
+        self.output_dict['completion_time_ij'].append(self.completion_time_ij)
+        self.output_dict['starting_time_mw'].append(self.starting_time_mw)
+        self.output_dict['completion_time_mw'].append(self.completion_time_mw)
+        self.output_dict['y_jirm'].append(self.y_jirm)
+        self.output_dict['y_mwr'].append(self.y_mwr)
+        self.output_dict['Movetype'].append(movetype)
+        self.output_dict['Iteration'].append(self.iteration_number)
+
+    def write_to_pickle(self):
+        folder = 'output_pickle'
+        file = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '.pickle'
+        filename = os.path.join(os.getcwd(), folder, file)
+        # Path(filename).mkdir(parents=True, exist_ok=True)
+        with open(filename, 'wb') as handle:
+            pickle.dump(self.output_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def _determine_max_position(self, machine):
         max_pos = []
@@ -885,7 +898,8 @@ class JobShop:
                         start = copy.deepcopy(self.machine_time[machine][0])
                         periods = 0
                         required_periods = (
-                                self.maintenance_duration[machine][maintenance_w] / self.period
+                                self.maintenance_duration[machine][maintenance_w]
+                                / self.period
                         )
                         earliest_start = start
                         sum_z_mu = np.sum(self.z_mu, axis=0)
@@ -925,7 +939,8 @@ class JobShop:
                             self.starting_time_mw[machine][maintenance_w] / self.period
                         )
                         end_index = int(
-                            self.completion_time_mw[machine][maintenance_w] / self.period
+                            self.completion_time_mw[machine][maintenance_w]
+                            / self.period
                         )
                         self.z_mu[machine, start_index:end_index] += 1
                         if any(self.z_mu[machine, :] > 1):
@@ -1031,7 +1046,7 @@ class JobShop:
 if __name__ == "__main__":
     processing_time_path = "parameter/Takzeit_overview.xlsx"
     variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [25, 25, 25, 25]
+    amount_of_variants = [5, 5, 5, 5]
     processing_time_input, maintenance = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants, maintenance=True
     )
@@ -1040,13 +1055,13 @@ if __name__ == "__main__":
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         maintenance_duration=maintenance,
-        max_iter=300,
+        max_iter=700,
         max_simultaneous=3,
-        convergence_limit=50,
-        maintenance_swap=5,
-        insert_another=4,
-        insert_one=2,
-        operation_swap=3,
+        convergence_limit=700,
+        maintenance_swap=0,
+        insert_another=10,
+        insert_one=1,
+        operation_swap=2,
     )
     # Run the optimization
     job_shop_object.main_run()
