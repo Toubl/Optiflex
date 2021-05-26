@@ -57,7 +57,7 @@ class JobShop:
             period=10,
     ):
         self.maintenance_max = maintenance_max
-        self.processing_time = processing_time
+        self.init_processing_time = processing_time
         self.maintenance_duration = maintenance_duration
         self.n_m = n_m
         self.buffer_capacity = buffer_capacity
@@ -70,6 +70,7 @@ class JobShop:
         self.operation_swap = operation_swap
         self.period = period
 
+        self.processing_time = None
         self.starting_time_ij = None
         self.completion_time_ij = None
         self.completion_time_rm = None
@@ -104,21 +105,16 @@ class JobShop:
         self.final_best = None
         self.output_dict = {
             "Makespan": [],
-            "starting_time_ij": [],
-            "completion_time_ij": [],
-            "starting_time_mw": [],
-            "completion_time_mw": [],
-            "y_jirm": [],
-            "y_mwr": [],
             "Movetype": [],
             "Iteration": [],
-            'Optimum': [],
+            "Optimum": [],
+            "Initial": [],
         }
 
         self.feasibility = None
         self.start_time = None
 
-    def main_run(self):
+    def main_run(self, optimized_prio=False, optimized_maint=False, init_runs=100):
         """
         Main routine to perform the optimization algorithm. After generating an initial solution, new solutions
         are generated to increase the makespan. This is done while the termination criterion is not reached.
@@ -139,54 +135,107 @@ class JobShop:
 
         self.generate_initial_solution()
         print("Makespan of initial solution: {}".format(self.makespan))
-        self.plot_gantt_chart(
-            group=True,
-            title="Initial Scheduling with a makespan of {}".format(self.makespan),
-        )
+        #self.plot_gantt_chart(
+        #    group=True,
+        #    title="Initial Scheduling with a makespan of {}".format(self.makespan),
+        #)
 
         self.make_span.append(self.makespan)
 
+        init = copy.deepcopy([self.y_jirm, self.y_mwr])
+        self.output_dict['Initial'] = copy.deepcopy(init)
+        with alive_bar(init_runs, title='Initialization') as bar:
+            for i in range(init_runs):
+                bar()
+                if optimized_prio is True:
+                    np.random.shuffle(self.priority_list)
+                    self._estimating_initial_domains()
+                    self.initialize_times()
+                    self._initial_scheduling(priority_list=self.priority_list)
+                if optimized_maint is True:
+                    self._random_maintenance_for_initialization_unscaled()
+                    self.calculate_fitness_function()
+                    self._calculate_makespan()
+                if self.makespan < self.make_span[-1]:
+                    self.make_span.append(self.makespan)
+                    init = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    print('Updated initialization makespan: {}'.format(self.makespan))
+
+        self.y_jirm = copy.deepcopy(init[0])
+        self.y_mwr = copy.deepcopy(init[1])
+        self.optimized_solution = copy.deepcopy(init)
+
         self._multiple_machine_jobs()
-        reset_counter = 0
+        print('Starting optimization...')
         with alive_bar(self.max_iter, title="Iterations") as bar:
             while not self.determine_termination_criterion():
                 self.generate_new_solution()
-                if self.improvement is False:
-                    reset_counter += 1
-                else:
-                    reset_counter = 0
-                if reset_counter > self.convergence_limit:
-                    reset_counter = 0
-                    if (
-                            self.final_best is None
-                            or self.optimized_solution[2] < self.final_best[2]
-                    ):
-                        self.final_best = copy.deepcopy(self.optimized_solution)
-                    self._random_maintenance_for_initialization_scaled()
-                    print(
-                        "----------------------------------------------------------------\t\t\t\t\n "
-                        "No convergence --> Try diversification!\n"
-                        " ---------------------------------------------------------------"
-                    )
-                    self.calculate_fitness_function(0)
-                    self._calculate_makespan()
-                    self.make_span.append(self.makespan)
                 bar()
 
-        if self.final_best is not None:
-            self.y_jirm = copy.deepcopy(self.final_best[0])
-            self.y_mwr = copy.deepcopy(self.final_best[1])
+        if self.optimized_solution is not None:
+            self.y_jirm = copy.deepcopy(self.optimized_solution[0])
+            self.y_mwr = copy.deepcopy(self.optimized_solution[1])
             self.calculate_fitness_function(0)
             self._calculate_makespan()
-            if self.makespan != self.final_best[2]:
-                warnings.warn("Something is wrong in calculating optimal solution!")
-            self.plot_gantt_chart(
-                group=True,
-                title="Optimized solution with makespan of {}".format(self.makespan),
+
+            self.output_dict["Optimum"].append(self.y_jirm)
+            self.output_dict["Optimum"].append(self.y_mwr)
+        else:
+            print(
+                "\n\nNo further optimum found. Initial Solution is already optimal!\n\n"
             )
-            self.output_dict['Optimum'].append(self.y_jirm)
-            self.output_dict['Optimum'].append(self.y_mwr)
-        elif self.optimized_solution is not None:
+            self.output_dict["Optimum"].append("Initial Solution is Optimum")
+
+        self.write_to_pickle()
+        time_for_calculation = (time.time() - self.start_time) / 60
+        print("Total time for calculation: {:.4f} minutes".format(time_for_calculation))
+
+    def run_from_previous_solution(self, pickle_file, optimized_maint=False, init_runs=100):
+        self.start_time = time.time()
+        np.random.seed(
+            20
+        )  # Fix seed in order to make multiple optimization runs equivalent
+        header = pyfiglet.figlet_format("OPTIFLEX", font="big")
+        print(header)
+
+        self._estimating_initial_domains()
+        self.initialize_times()
+
+        previous_solution = pickle.load(open(pickle_file, "rb"))
+        self.y_jirm = previous_solution['Optimum'][0]
+
+        self._initial_maintenance()
+
+        self.calculate_fitness_function(0)
+        self._calculate_makespan()
+        self.make_span.append(self.makespan)
+        print("Makespan of initial solution: {}".format(self.makespan))
+
+        init = copy.deepcopy([self.y_jirm, self.y_mwr])
+        self.output_dict['Initial'] = copy.deepcopy(init)
+        with alive_bar(init_runs, title='Initialization') as bar:
+            for i in range(init_runs):
+                bar()
+                if optimized_maint is True:
+                    self._random_maintenance_for_initialization_unscaled()
+                    self.calculate_fitness_function()
+                    self._calculate_makespan()
+                if self.makespan < self.make_span[-1]:
+                    self.make_span.append(self.makespan)
+                    init = copy.deepcopy([self.y_jirm, self.y_mwr])
+                    print('Updated initialization makespan: {}'.format(self.makespan))
+
+        self.y_jirm = copy.deepcopy(init[0])
+        self.y_mwr = copy.deepcopy(init[1])
+        self.optimized_solution = copy.deepcopy(init)
+
+        self._multiple_machine_jobs()
+        with alive_bar(self.max_iter, title="Iterations") as bar:
+            while not self.determine_termination_criterion():
+                self.generate_new_solution()
+                bar()
+
+        if self.optimized_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
             self.calculate_fitness_function(0)
@@ -195,13 +244,13 @@ class JobShop:
                 group=True,
                 title="Optimized solution with makespan of {}".format(self.makespan),
             )
-            self.output_dict['Optimum'].append(self.y_jirm)
-            self.output_dict['Optimum'].append(self.y_mwr)
+            self.output_dict["Optimum"].append(self.y_jirm)
+            self.output_dict["Optimum"].append(self.y_mwr)
         else:
             print(
                 "\n\nNo further optimum found. Initial Solution is already optimal!\n\n"
             )
-            self.output_dict['Optimum'].append('Initial Solution is Optimum')
+            self.output_dict["Optimum"].append("Initial Solution is Optimum")
 
         self.write_to_pickle()
         time_for_calculation = (time.time() - self.start_time) / 60
@@ -224,7 +273,7 @@ class JobShop:
         self.priority_list = self._generate_priority_list()
         self._initial_scheduling(self.priority_list)
 
-    def calculate_fitness_function(self, machine):
+    def calculate_fitness_function(self, machine=0):
         """
         Function for calculating the fitness value of the current setting of y_jirm. After initializing the
         variables, equation 1, 5 and 6 are called to initially set the helper variables, which are then
@@ -270,9 +319,9 @@ class JobShop:
         self._apply_move_type()
 
     def _selecting_move_type(self):
-        #if (
+        # if (
         #        self.iteration_number < self.max_iter * 0.1
-        #):  # First 10% of iterations is maintenance
+        # ):  # First 10% of iterations is maintenance
         #    self._move_maintenance_swap()
         if self.move_type_selection["insert_another"] < self.insert_another:
             self._move_operation_insert_on_another_machine()
@@ -339,15 +388,29 @@ class JobShop:
             if new_machine != current_machine:
                 break
         # Try every position on new machine and select the one with smallest makespan
-        r_max = self._determine_max_position(new_machine) + 1
+        max_pos = self._determine_max_position(new_machine) + 1
 
         for maintenance_w, position_w in enumerate(self.y_mwr[current_machine]):
             if position_w >= current_position:
                 self.y_mwr[current_machine][maintenance_w] += -1
         new_y_mwr = copy.deepcopy(self.y_mwr)
 
+        current_starting_time = self.starting_time_rm[current_position, current_machine]
+        # get position on new machine, where this starting matches best
+        r_opti = max_pos
+        for index, start in enumerate(self.starting_time_rm[:, new_machine]):
+            if current_starting_time <= start:
+                r_opti = index
+                break
+        r_min = r_opti - 3
+        r_max = r_opti + 4
+        if r_min < 0:
+            r_min = 0
+        if r_max > max_pos:
+            r_max = max_pos
+
         for r_new in range(
-                r_max
+                r_min, r_max
         ):  # +1 because operation can also be set to the last position on new machine
             self.y_jirm = copy.deepcopy(initial_y_jirm)
             self.y_mwr = copy.deepcopy(new_y_mwr)
@@ -393,7 +456,7 @@ class JobShop:
                     [new_y, self.y_mwr, self.makespan]
                 )
                 self.y_jirm = copy.deepcopy(new_y)
-                self.update_output_information('Insert_another')
+                self.update_output_information("Insert_another")
                 new_solution = copy.deepcopy(new_y)
 
         if new_solution is not None:
@@ -454,7 +517,7 @@ class JobShop:
                     self.optimized_solution = copy.deepcopy(
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
-                    self.update_output_information('operation_swap')
+                    self.update_output_information("operation_swap")
         # Set y_jirm to the generated optimal solution if available
         if new_y is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
@@ -530,7 +593,7 @@ class JobShop:
                     self.optimized_solution = copy.deepcopy(
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
-                    self.update_output_information('Insert_one')
+                    self.update_output_information("Insert_one")
 
         if new_solution is not None:
             self.y_jirm = copy.deepcopy(self.optimized_solution[0])
@@ -574,7 +637,7 @@ class JobShop:
                         [self.y_jirm, self.y_mwr, self.makespan]
                     )
                     new_y_mwr = copy.deepcopy(self.optimized_solution[1])
-                    self.update_output_information('Maintenance_swap')
+                    self.update_output_information("Maintenance_swap")
 
                 self.y_mwr = copy.deepcopy(initial_y_mwr)
 
@@ -599,22 +662,16 @@ class JobShop:
         pass
 
     def update_output_information(self, movetype):
-        self.output_dict['Makespan'].append(self.makespan)
-        self.output_dict['starting_time_ij'].append(self.starting_time_ij)
-        self.output_dict['completion_time_ij'].append(self.completion_time_ij)
-        self.output_dict['starting_time_mw'].append(self.starting_time_mw)
-        self.output_dict['completion_time_mw'].append(self.completion_time_mw)
-        self.output_dict['y_jirm'].append(self.y_jirm)
-        self.output_dict['y_mwr'].append(self.y_mwr)
-        self.output_dict['Movetype'].append(movetype)
-        self.output_dict['Iteration'].append(self.iteration_number)
+        self.output_dict["Makespan"].append(self.makespan)
+        self.output_dict["Movetype"].append(movetype)
+        self.output_dict["Iteration"].append(self.iteration_number)
 
     def write_to_pickle(self):
-        folder = 'output_pickle'
-        file = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '.pickle'
+        folder = "output_pickle"
+        file = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".pickle"
         filename = os.path.join(os.getcwd(), folder, file)
         # Path(filename).mkdir(parents=True, exist_ok=True)
-        with open(filename, 'wb') as handle:
+        with open(filename, "wb") as handle:
             pickle.dump(self.output_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def _determine_max_position(self, machine):
@@ -641,15 +698,15 @@ class JobShop:
             initial_length (int): Upper bound for total amount of periods
         """
 
-        initial_length = np.sum(self.processing_time)
+        # initial_length = np.sum(self.processing_time)
 
-        self.j = np.shape(self.processing_time)[0]
-        self.m = np.shape(self.processing_time)[2]
+        self.j = np.shape(self.init_processing_time)[0]
+        self.m = np.shape(self.init_processing_time)[2]
         self.r = (
                 int(
                     np.max(
                         np.sum(
-                            np.sum(np.array(self.processing_time, dtype=bool), axis=0),
+                            np.sum(np.array(self.init_processing_time, dtype=bool), axis=0),
                             axis=0,
                         )
                     )
@@ -660,7 +717,7 @@ class JobShop:
         self.i = []
         new_processing_time = []
         for j in range(self.j):
-            processing_time = self.processing_time[j, :, :]
+            processing_time = self.init_processing_time[j, :, :]
             self.i.append(
                 np.shape(processing_time[~np.all(processing_time == 0, axis=1)])[0]
             )
@@ -673,7 +730,6 @@ class JobShop:
 
         if self.maintenance_duration is not None:
             self.z_mu = np.zeros((self.m, 9000))
-        return initial_length
 
     def initialize_times(self):
         self.starting_time_rm = np.zeros((self.r, self.m))
@@ -753,7 +809,6 @@ class JobShop:
         )  # generate priority list
 
         # print("Average lower bound for makespan: {}".format(-priority_list[-1][1]))
-
         return priority_list
 
     def _random_maintenance_for_initialization_scaled(self):
@@ -795,7 +850,7 @@ class JobShop:
         """
         self.maintenance_duration = copy.deepcopy(self.initial_maintenance_duration)
         for machine in range(self.m):
-            max_position = self._determine_max_position(machine)
+            # max_position = self._determine_max_position(machine)
             # check if maintenance is on this machine
             if self.maintenance_duration[machine] is not None:
                 for maintenance_w in range(len(self.maintenance_duration[machine][:])):
@@ -1046,7 +1101,7 @@ class JobShop:
 if __name__ == "__main__":
     processing_time_path = "parameter/Takzeit_overview.xlsx"
     variants_of_interest = ["B37 D", "B37 C15 TUE1", "B48 B20 TUE1", "B38 A15 TUE1"]
-    amount_of_variants = [5, 5, 5, 5]
+    amount_of_variants = [10, 10, 10, 10]
     processing_time_input, maintenance = extract_parameter(
         processing_time_path, variants_of_interest, amount_of_variants, maintenance=True
     )
@@ -1055,13 +1110,15 @@ if __name__ == "__main__":
     job_shop_object = JobShop(
         processing_time=processing_time_input,
         maintenance_duration=maintenance,
-        max_iter=700,
+        max_iter=10,
         max_simultaneous=3,
-        convergence_limit=700,
+        convergence_limit=800,
         maintenance_swap=0,
         insert_another=10,
         insert_one=1,
         operation_swap=2,
     )
     # Run the optimization
-    job_shop_object.main_run()
+    #job_shop_object.main_run(optimized_prio=True, init_runs=20)
+
+    job_shop_object.run_from_previous_solution('output_pickle/test.pickle', optimized_maint=True, init_runs=100)
