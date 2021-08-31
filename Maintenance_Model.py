@@ -134,11 +134,12 @@ class JobShop:
         print(header)
 
         self.generate_initial_solution()
+        self.colors = self._generate_colors()
         print("Makespan of initial solution: {}".format(self.makespan))
-        #self.plot_gantt_chart(
-        #    group=True,
-        #    title="Initial Scheduling with a makespan of {}".format(self.makespan),
-        #)
+        self.plot_gantt_chart(
+            group=True,
+            title="Initial Scheduling with a makespan of {}".format(self.makespan),
+        )
 
         self.make_span.append(self.makespan)
 
@@ -160,6 +161,10 @@ class JobShop:
                     self.make_span.append(self.makespan)
                     init = copy.deepcopy([self.y_jirm, self.y_mwr])
                     print('Updated initialization makespan: {}'.format(self.makespan))
+                    self.plot_gantt_chart(
+                        group=True,
+                        title="Initial Scheduling with a makespan of {}".format(self.makespan),
+                    )
 
         self.y_jirm = copy.deepcopy(init[0])
         self.y_mwr = copy.deepcopy(init[1])
@@ -198,8 +203,7 @@ class JobShop:
         header = pyfiglet.figlet_format("OPTIFLEX", font="big")
         print(header)
 
-        self._estimating_initial_domains()
-        self.initialize_times()
+        self.generate_initial_solution()
 
         previous_solution = pickle.load(open(pickle_file, "rb"))
         self.y_jirm = previous_solution['Optimum'][0]
@@ -209,6 +213,7 @@ class JobShop:
         self.calculate_fitness_function(0)
         self._calculate_makespan()
         self.make_span.append(self.makespan)
+        self.colors = self._generate_colors()
         print("Makespan of initial solution: {}".format(self.makespan))
 
         init = copy.deepcopy([self.y_jirm, self.y_mwr])
@@ -216,6 +221,10 @@ class JobShop:
         with alive_bar(init_runs, title='Initialization') as bar:
             for i in range(init_runs):
                 bar()
+                np.random.shuffle(self.priority_list)
+                self._estimating_initial_domains()
+                self.initialize_times()
+                self._initial_scheduling(priority_list=self.priority_list)
                 if optimized_maint is True:
                     self._random_maintenance_for_initialization_unscaled()
                     self.calculate_fitness_function()
@@ -240,10 +249,10 @@ class JobShop:
             self.y_mwr = copy.deepcopy(self.optimized_solution[1])
             self.calculate_fitness_function(0)
             self._calculate_makespan()
-            self.plot_gantt_chart(
-                group=True,
-                title="Optimized solution with makespan of {}".format(self.makespan),
-            )
+            #self.plot_gantt_chart(
+            #    group=True,
+            #    title="Optimized solution with makespan of {}".format(self.makespan),
+            #)
             self.output_dict["Optimum"].append(self.y_jirm)
             self.output_dict["Optimum"].append(self.y_mwr)
         else:
@@ -726,7 +735,6 @@ class JobShop:
             )
         self.processing_time = copy.deepcopy(new_processing_time)
         # self.shape = [self.j, self.i, self.r, self.m]
-        self.colors = self._generate_colors()
 
         if self.maintenance_duration is not None:
             self.z_mu = np.zeros((self.m, 9000))
@@ -1119,6 +1127,6 @@ if __name__ == "__main__":
         operation_swap=2,
     )
     # Run the optimization
-    #job_shop_object.main_run(optimized_prio=True, init_runs=20)
+    #job_shop_object.main_run(optimized_prio=True, init_runs=100)
 
     job_shop_object.run_from_previous_solution('output_pickle/test.pickle', optimized_maint=True, init_runs=100)
